@@ -1093,6 +1093,7 @@ function updatePeds(dt) {
       p.facing += dt * 0.6;            // idle: look around
       if (Math.abs(Math.sin(p.phase)) < 0.3) p.facing = 0;
     } else {
+      const B = pts[p.seg];
       const dx = B[0] - p.x, dz = B[1] - p.z;
       const d = Math.hypot(dx, dz);
       if (d < 0.4) {
