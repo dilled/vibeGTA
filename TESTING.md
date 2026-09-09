@@ -99,6 +99,23 @@ those manually.
 - [ ] Busted while flying: the chopper flies off and lands on its own
       (not impounded); you fall out
 
+### Gamepad (any XInput / DualShock / DualSense)
+- [ ] Plug in a controller and press any button — it activates itself
+- [ ] On foot: left stick moves (both axes), right stick looks
+      (right = look right, up = look up — not inverted)
+- [ ] A jumps (held = auto-hop); L1 sprints
+- [ ] X behaves exactly like E (throw driver out → steal → get out);
+      Y breaks the highlighted block
+- [ ] Car: A gas, B brake/reverse, right stick steers (A-key-left rule
+      still holds), L1 handbrake, R1 boost
+- [ ] Heli: left stick up/down & turn, A forward, B brake, X pilot out /
+      get out
+- [ ] Keyboard + pad together: hold W on the keyboard, move the stick —
+      the stick must not kill the keyboard's W; releasing both stops you
+- [ ] Unplug the pad while using it — controls release, nothing sticks
+- [ ] Start pauses (overlay returns); resume needs a click (browser security
+      — a polled pad can't grab pointer-lock)
+
 ### HUD & UI
 - [ ] Wanted stars (★, gold) appear/clear correctly
 - [ ] Hint bar: context-sensitive (steal/throw-driver, car controls,

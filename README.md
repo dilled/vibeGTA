@@ -78,6 +78,30 @@ In a helicopter:
 | Space | brake |
 | E | throw the pilot out / steal, or get out (in the air: you get flung) |
 
+## Gamepad
+
+Any XInput / DualShock / DualSense works — plug it in and press a button, the
+pad activates itself (the game polls `navigator.getGamepads()` every frame
+and merges its output into the same input map as the keyboard):
+
+| Button | On foot | In a car | In a heli |
+|--------|---------|----------|-----------|
+| Left stick | move (also steers) | drive / steer | turn + up/down |
+| Right stick | look | steer | (camera is fixed) |
+| A / Cross | jump (hold = auto-hop) | gas | fly forward |
+| B / Circle | — | brake / reverse | brake |
+| X / Square | in/out of vehicle (= E) | in/out | in/out |
+| Y / Triangle | break targeted block | — | — |
+| L1 / LB | sprint | handbrake | — |
+| R1 / RB | — | boost | — |
+| D-pad | move | — | — |
+| Select / Start | pause (see below) | | |
+
+The keyboard always wins a key the gamepad is faking — hold W on the
+keyboard and the stick can't clear it. Unplugging a pad clears its keys.
+Note: **Start only pauses** — browsers won't let a polled gamepad grab
+pointer-lock, so starting/unpausing still needs a click on the overlay.
+
 ## Features
 
 - Procedural 256×256 voxel city (seeded LCG): blocks, roads, sidewalks, lots,

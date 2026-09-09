@@ -70,6 +70,8 @@
     <div class="row"><b>Left click</b><span>break blocks</span></div>
     <div class="row"><b>Esc</b><span>pause</span></div>
     <div class="row"><b>E</b><span>steal / exit car</span></div>
+    <div class="row"><b>Gamepad</b><span>sticks move/look/steer &middot; A jump/gas &middot; B brake</span></div>
+    <div class="row"><b>Gamepad&hairsp;·&hairsp;2</b><span>X in/out &middot; Y break block &middot; L1/R1 sprint/boost/handbrake &middot; Start pause</span></div>
     <div style="margin-top:10px;font-size:12px;color:#7d92b4">roads &amp; sidewalks are indestructible. the rest is not.</div>
   </div>
   <div class="play">— click to play —</div>
@@ -1502,6 +1504,15 @@ function exitCar() {
   player.onGround = true;
   rig.g.visible = true;
 }
+// E key / X button: throw driver out, then steal / get out
+function doInteract() {
+  if (!playing) return;
+  if (drivingCar) exitCar();
+  else if (nearCar) {
+    if (nearCar.driver) { ejectDriver(nearCar); nearCar.parked = true; addWanted(1); }
+    else enterCar(nearCar);
+  }
+}
 // fling the driver/pilot out (GTA1 style carjacking)
 function ejectDriver(car) {
   const d = car.driver;
@@ -1803,18 +1814,72 @@ const overlay = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
 const statusEl = document.getElementById('status');
 const keys = {};
+const kb = {};   // codes held via keyboard (gamepad polling must not stomp them)
 document.addEventListener('keydown', e => {
   keys[e.code] = true;
+  kb[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
-  if (e.code === 'KeyE' && playing) {
-    if (drivingCar) exitCar();
-    else if (nearCar) {
-      if (nearCar.driver) { ejectDriver(nearCar); nearCar.parked = true; addWanted(1); }
-      else enterCar(nearCar);
-    }
-  }
+  if (e.code === 'KeyE') doInteract();
 });
-document.addEventListener('keyup', e => { keys[e.code] = false; });
+document.addEventListener('keyup', e => { keys[e.code] = false; kb[e.code] = false; });
+
+// ---- gamepad: synthetic codes merged into keys every frame ----------------
+// any XInput / DualShock / DualSense works; it activates itself when you press
+const PAD_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space'];
+let padPrev = null;
+function pollGamepad(dt) {
+  const pads = (typeof navigator !== 'undefined' && navigator.getGamepads)
+    ? navigator.getGamepads() : [];
+  const pad = pads.find(p => p && p.connected) || null;
+  const prev = padPrev;
+  padPrev = null;
+  if (!pad) {
+    if (prev) for (const c of PAD_CODES) keys[c] = !!kb[c];   // pad unplugged
+    return;
+  }
+  const b = i => pad.buttons[i] && pad.buttons[i].pressed;
+  const edge = i => b(i) && !(prev && prev[i]);
+  padPrev = pad.buttons.map(x => x.pressed);
+  const ax = i => { const v = pad.axes[i] || 0; return Math.abs(v) > 0.15 ? v : 0; };
+  const lx = ax(0), ly = ax(1), rx = ax(2), ry = ax(3);
+  const inCar = !!drivingCar, heli = inCar && drivingCar.heli;
+  for (const c of PAD_CODES) keys[c] = !!kb[c];
+  const set = c => { keys[c] = true; };
+  if (!inCar) {
+    // on foot: left stick move, right stick look, A jump
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (b(12)) set('KeyW'); if (b(13)) set('KeyS'); if (b(14)) set('KeyA'); if (b(15)) set('KeyD');
+    if (b(4)) set('ShiftLeft');            // L1 sprint
+    if (b(0)) set('Space');                // A jump (hold = auto-hop)
+    if (edge(2)) doInteract();             // X in/out of vehicle
+    if (edge(3) && playing) breakBlock();  // Y break block
+  } else if (heli) {
+    // heli: left stick = turn (X) + up/down (Y), A forward, B brake
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (b(0)) set('ShiftLeft');            // A throttle
+    if (b(1)) set('Space');                // B brake
+    if (edge(2)) doInteract();
+  } else {
+    // car: A gas, B brake/reverse, sticks steer
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (rx < 0) set('KeyA'); else if (rx > 0) set('KeyD');
+    if (b(0)) set('KeyW');                 // A gas
+    if (b(1)) set('KeyS');                 // B brake
+    if (b(4)) set('Space');                // L1 handbrake
+    if (b(5)) set('ShiftLeft');            // R1 boost
+    if (edge(2)) doInteract();
+  }
+  // right stick is the camera on foot (A = left stays true)
+  if (playing && !inCar) {
+    player.yaw += rx * 2.2 * dt;
+    player.pitch = THREE.MathUtils.clamp(player.pitch - ry * 1.8 * dt, -1.45, 1.45);
+  }
+  // Start pauses; unpausing needs a click (browsers won't let a pad grab the mouse)
+  if (edge(9) && playing) document.exitPointerLock();
+}
 
 overlay.addEventListener('click', () => {
   const c = renderer.domElement;
@@ -1883,6 +1948,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
+  pollGamepad(dt);
   if (playing && !busted) {
     if (drivingCar) updateDriving(dt);
     else { updatePlayer(dt); breakIfHeld(dt); }
