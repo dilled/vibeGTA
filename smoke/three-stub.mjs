@@ -2,6 +2,9 @@
 export class Vector3 {
   constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
   set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
+  setX(x) { this.x = x; return this; }
+  setY(y) { this.y = y; return this; }
+  setZ(z) { this.z = z; return this; }
   copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
   clone() { return new Vector3(this.x, this.y, this.z); }
   addScaledVector(v, s) { this.x += v.x * s; this.y += v.y * s; this.z += v.z * s; return this; }
@@ -33,6 +36,7 @@ export class PointsMaterial extends Mat {}
 export class SpriteMaterial extends Mat {}
 export class BoxGeometry { translate() {} }
 export class PlaneGeometry {}
+export class CircleGeometry {}
 export class EdgesGeometry {}
 class Node {
   constructor() {
@@ -46,6 +50,8 @@ class Node {
   add(c) { this.children.push(c); }
   updateMatrixWorld() {}
   lookAt() {}
+  localToWorld(v) { return v; }
+  removeFromParent() {}
 }
 export class Group extends Node {}
 export class Mesh extends Node {
