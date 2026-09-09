@@ -1516,7 +1516,7 @@ function updateDriving(dt) {
   const car = drivingCar, g = car.g, k = keys;
   const throttle = k['KeyW'] || k['ArrowUp'];
   const brake = k['KeyS'] || k['ArrowDown'];
-  const steer = ((k['KeyD'] || k['ArrowRight']) ? 1 : 0) - ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0);
+  const steer = ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0) - ((k['KeyD'] || k['ArrowRight']) ? 1 : 0);
   const boost = k['ShiftLeft'] || k['ShiftRight'];
   const hand = k['Space'];
   const maxV = boost ? 24 : 15;
@@ -1614,7 +1614,7 @@ document.addEventListener('pointerlockchange', () => {
 document.addEventListener('mousemove', e => {
   if (!playing || drivingCar) return;
   player.yaw += e.movementX * 0.0023;
-  player.pitch = THREE.MathUtils.clamp(player.pitch + e.movementY * 0.0023, -1.45, 1.45);
+  player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0023, -1.45, 1.45);
 });
 let mouseDown = false, breakCooldown = 0;
 document.addEventListener('mousedown', e => {
