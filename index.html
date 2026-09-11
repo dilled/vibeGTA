@@ -2012,6 +2012,9 @@ let mpApi = null;
   const mpUrl = new URLSearchParams(location.search).get('mp');
   if (mpUrl) {
     const gta = await import('./lib/gta.js');
+    // the server is the master of the world: it may reject one of our edits
+    // (roads/sidewalks survive, nothing is placeable) — restore original cell
+    const world0 = world.slice();
     mpApi = gta.attachGta({
       player, scene,
       url: mpUrl,
@@ -2019,6 +2022,10 @@ let mpApi = null;
       // the (expensive) chunk remesh itself
       applyRemoteBlock: (x, y, z, t) => { setB(x, y, z, t); },
       rebuildAround,
+      restoreBlock: (x, y, z) => {
+        const i = idx(x, y, z);
+        if (world[i] !== world0[i]) { setB(x, y, z, world0[i]); rebuildAround(x, z); }
+      },
     });
   }
 }

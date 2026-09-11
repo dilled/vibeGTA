@@ -134,6 +134,11 @@ those manually.
       (per-tab identity)
 - [ ] **Shared destruction:** break a block in one tab → the other tab
       sees the same block removed within ~0.5 s
+- [ ] **Master rollback:** try to break a road/sidewalk block → it pops
+      back into place in your own tab within one tick (server rejected it),
+      no console errors
+- [ ] Rejection is targeted: the *other* tabs never see your rejected
+      edit in their block stream
 - [ ] **Late joiner:** a third tab joins → it has the same breaks the first
       two made
 - [ ] Kill the server → reconnection; restart → session restores

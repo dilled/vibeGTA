@@ -41,6 +41,13 @@ the same city without transmitting it. Over the wire:
   TCP), and a tab that joins late receives the full edit history, so every
   tab converges on the same hole-riddled skyline.
 
+The server is the **master** of the shared state: it holds the same
+deterministic world grid and validates everything clients send — only
+"break to air" edits on destructible blocks are applied (roads and
+sidewalks survive), placement is impossible, and player states that
+imply super-speed or leave the world are dropped. A rejected block edit
+comes back in the next tick and the client rolls the block back.
+
 **Hard-refresh after a server update** (Ctrl+Shift+R): an old tab still sees
 the other players, but its block edits are no longer synced.
 
