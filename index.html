@@ -36,6 +36,19 @@
     box-shadow: 0 0 0 1.5px rgba(0,0,0,.5); mix-blend-mode: difference;
     opacity: 0; transition: opacity .3s;
   }
+  #busted {
+    position: fixed; left: 50%; top: 38%; transform: translate(-50%,-50%); z-index: 14;
+    font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 64px; font-weight: 900;
+    letter-spacing: 12px; color: #ff4a3a; text-shadow: 0 0 24px rgba(255,60,40,.8), 0 2px 0 #000;
+    display: none; pointer-events: none;
+  }
+  #hint {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 12;
+    font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 13px;
+    color: #ffe9a0; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+    background: rgba(6,10,18,.45); border: 1px solid rgba(120,160,230,.18);
+    border-radius: 8px; padding: 6px 14px; display: none; pointer-events: none; white-space: nowrap;
+  }
   #status {
     position: fixed; top: 14px; right: 14px; z-index: 12; text-align: right;
     font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 12px; line-height: 1.5;
@@ -56,12 +69,17 @@
     <div class="row"><b>Space</b><span>jump</span></div>
     <div class="row"><b>Left click</b><span>break blocks</span></div>
     <div class="row"><b>Esc</b><span>pause</span></div>
+    <div class="row"><b>E</b><span>steal / exit car</span></div>
+    <div class="row"><b>Gamepad</b><span>sticks move/look/steer &middot; A jump/gas &middot; B brake</span></div>
+    <div class="row"><b>Gamepad&hairsp;·&hairsp;2</b><span>X in/out &middot; Y break block &middot; L1/R1 sprint/boost/handbrake &middot; Start pause</span></div>
     <div style="margin-top:10px;font-size:12px;color:#7d92b4">roads &amp; sidewalks are indestructible. the rest is not.</div>
   </div>
   <div class="play">— click to play —</div>
 </div>
 <div id="crosshair"></div>
 <div id="status"></div>
+<div id="busted">BUSTED</div>
+<div id="hint"></div>
 
 <script type="importmap">
 { "imports": { "three": "./lib/three.module.js" } }
@@ -855,9 +873,19 @@ function updatePlayer(dt) {
   rig.armR.rotation.x = sw * 0.65;
   rig.body.position.y = Math.abs(Math.sin(player.phase * 2)) * 0.05 * Math.min(1, hs / 4);
 
-  // place rig
+  // place rig: face movement direction (clamped so walking backwards
+  // looks natural instead of a full 180° spin; idle: face away from camera)
   rig.g.position.copy(player.pos);
-  rig.g.rotation.y = player.yaw;
+  const fwdYaw = player.yaw + Math.PI;
+  let faceYaw = fwdYaw;
+  if (hs > 0.5) {
+    let rel = Math.atan2(player.vel.x, player.vel.z) - fwdYaw;
+    rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+    faceYaw = fwdYaw + THREE.MathUtils.clamp(rel, -2.1, 2.1);
+  }
+  let dyaw = faceYaw - rig.g.rotation.y;
+  dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+  rig.g.rotation.y += dyaw * Math.min(1, 12 * dt);
 
   // TPS camera behind the head
   const cp = player.pitch, yaw = player.yaw;
@@ -961,6 +989,7 @@ function localBlockEdit(x, y, z, type) {
   if (mpApi) mpApi.blockEdit(x, y, z, type);
 }
 function breakBlock() {
+  if (drivingCar) return;
   const t = aimTarget();
   if (!t) return;
   const b = getB(t.x, t.y, t.z);
@@ -1014,12 +1043,30 @@ function spawnPeds(n) {
     const bi = ri(0, GRID - 1), bj = ri(0, GRID - 1);
     const [px, pz] = corner(blockStart(bi), blockStart(bj), ri(0, 3));
     peds.push({
-      x: px, z: pz, bi, bj, seg: ri(0, 3),
+      x: px, z: pz, y: 4, bi, bj, seg: ri(0, 3),
       pause: Math.random() * 2, phase: Math.random() * 10,
       facing: 0, speed: 1.1 + Math.random() * 0.5,
+      mode: 'ring', tx: 0, tz: 0, toBi: 0, toBj: 0, toSeg: 0,
       rig: makePedRig(),
     });
   }
+}
+// from the corner just reached, a straight shot across one adjacent road
+function crossOption(p) {
+  const bx = blockStart(p.bi), bz = blockStart(p.bj);
+  const opts = [];
+  if (p.seg === 0) {
+    if (p.bi > 0) opts.push([bx - 18.5, bz + 1.5, p.bi - 1, p.bj, 1]);
+    if (p.bj > 0) opts.push([bx + 1.5, bz - 18.5, p.bi, p.bj - 1, 3]);
+  } else if (p.seg === 1 && p.bj > 0) {
+    opts.push([bx + BLOCK_W - 2.5, bz - 18.5, p.bi, p.bj - 1, 2]);
+  } else if (p.seg === 2) {
+    if (p.bi < GRID - 1) opts.push([bx + 61.5, bz + BLOCK_W - 2.5, p.bi + 1, p.bj, 3]);
+    if (p.bj < GRID - 1) opts.push([bx + BLOCK_W - 2.5, bz + 61.5, p.bi, p.bj + 1, 1]);
+  } else if (p.seg === 3 && p.bi > 0) {
+    opts.push([bx - 18.5, bz + BLOCK_W - 2.5, p.bi - 1, p.bj, 2]);
+  }
+  return opts.length ? opts[(Math.random() * opts.length) | 0] : null;
 }
 function updatePeds(dt) {
   for (const p of peds) {
@@ -1028,17 +1075,36 @@ function updatePeds(dt) {
       [bx + 1.5, bz + 1.5], [bx + BLOCK_W - 2.5, bz + 1.5],
       [bx + BLOCK_W - 2.5, bz + BLOCK_W - 2.5], [bx + 1.5, bz + BLOCK_W - 2.5],
     ];
-    const A = pts[p.seg], B = pts[(p.seg + 1) & 3];
-    if (p.pause > 0) {
+    if (p.mode === 'cross') {
+      // walking straight across the road
+      const dx = p.tx - p.x, dz = p.tz - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.4) {
+        p.bi = p.toBi; p.bj = p.toBj; p.seg = p.toSeg;
+        p.mode = 'ring';
+        p.pause = 0.8 + Math.random() * 2;
+      } else {
+        const sp = p.speed * 1.3;
+        p.x += dx / d * sp * dt;
+        p.z += dz / d * sp * dt;
+        p.facing = Math.atan2(dx, dz);
+        p.phase += sp * dt * 4.4;
+      }
+    } else if (p.pause > 0) {
       p.pause -= dt;
       p.facing += dt * 0.6;            // idle: look around
       if (Math.abs(Math.sin(p.phase)) < 0.3) p.facing = 0;
     } else {
+      const B = pts[p.seg];
       const dx = B[0] - p.x, dz = B[1] - p.z;
       const d = Math.hypot(dx, dz);
       if (d < 0.4) {
         p.seg = (p.seg + 1) & 3;
-        if (Math.random() < 0.25) p.pause = 1 + Math.random() * 3;
+        if (Math.random() < 0.35) {
+          const c = crossOption(p);   // brave soul crosses the street
+          if (c) { p.tx = c[0]; p.tz = c[1]; p.toBi = c[2]; p.toBj = c[3]; p.toSeg = c[4]; p.mode = 'cross'; }
+          else p.pause = 1 + Math.random() * 3;
+        } else if (Math.random() < 0.25) p.pause = 1 + Math.random() * 3;
         if (Math.random() < 0.12) {
           // hop to an adjacent block
           const dxi = ri(-1, 1), dzj = ri(-1, 1);
@@ -1065,9 +1131,34 @@ function updatePeds(dt) {
     const sw = Math.sin(p.phase) * (p.pause > 0 ? 0 : 0.75);
     p.rig.legL.rotation.x = sw; p.rig.legR.rotation.x = -sw;
     p.rig.armL.rotation.x = -sw * 0.7; p.rig.armR.rotation.x = sw * 0.7;
-    p.rig.g.position.set(p.x, 4, p.z);
+    // feet follow the ground (curb 4 -> road 3 while crossing)
+    const gy = groundTopAt(Math.floor(p.x), Math.floor(p.z));
+    p.y += (gy - p.y) * Math.min(1, 8 * dt);
+    p.rig.g.position.set(p.x, p.y, p.z);
     p.rig.g.rotation.y = p.pause > 0 ? Math.sin(p.phase * 0.5) * 0.4 : p.facing;
   }
+}
+// run over by any car: ragdoll like a flung driver
+function flingPed(p, car) {
+  const i = peds.indexOf(p);
+  if (i >= 0) peds.splice(i, 1);
+  const h = car.g.rotation.y;
+  const fx = Math.sin(h), fz = Math.cos(h);
+  const sp = car.speed || 0;
+  let ox = p.x - car.x, oz = p.z - car.z;
+  const d = Math.hypot(ox, oz) || 1;
+  const g = p.rig.g;
+  g.position.set(p.x, p.y, p.z);
+  pushEject({
+    g,
+    v: new THREE.Vector3(
+      fx * sp * 0.55 + (ox / d) * (2 + Math.random() * 2),
+      2 + Math.random() * 1.5,
+      fz * sp * 0.55 + (oz / d) * (2 + Math.random() * 2)),
+    w: new THREE.Vector3((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 7),
+    settled: false,
+  });
+  if (car === drivingCar) addWanted(1);   // crime: running someone over
 }
 
 /* ================================================================
@@ -1083,11 +1174,14 @@ const laneOffset = d => {
   if (d[1] === 1) return [-3.5, 0];
   return [3.5, 0];
 };
-function makeCarBody(color) {
+const policeRedM = new THREE.MeshBasicMaterial({ color: 0xff2020 });
+const policeBlueM = new THREE.MeshBasicMaterial({ color: 0x2040ff });
+
+function makeCarBody(color, police) {
   const g = new THREE.Group();
-  const bodyM = new THREE.MeshLambertMaterial({ color });
+  const bodyM = new THREE.MeshLambertMaterial({ color: police ? 0xd8dde4 : color });
   const darkM = new THREE.MeshLambertMaterial({ color: 0x14161c });
-  const glassM = new THREE.MeshLambertMaterial({ color: 0x1b2833 });
+  const glassM = new THREE.MeshLambertMaterial({ color: 0x1b2833, transparent: true, opacity: 0.5 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, 4.4), bodyM);
   body.position.y = 0.62; body.castShadow = true; g.add(body);
   const hood = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.3, 4.2), bodyM);
@@ -1110,8 +1204,130 @@ function makeCarBody(color) {
   bumpF.position.set(0, 0.42, 2.2); g.add(bumpF);
   const bumpR = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.26, 0.3), darkM);
   bumpR.position.set(0, 0.42, -2.2); g.add(bumpR);
+  if (police) {
+    const stripeM = new THREE.MeshLambertMaterial({ color: 0x14161c });
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.16, 4.42), stripeM);
+    stripe.position.y = 0.72; g.add(stripe);
+    const red = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.4), policeRedM);
+    red.position.set(0, 1.66, 0.28); g.add(red);
+    const blue = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.12, 0.4), policeBlueM);
+    blue.position.set(0, 1.66, -0.12); g.add(blue);
+  }
   scene.add(g);
   return g;
+}
+// seated driver, faces +z, visible through the translucent cabin
+function makeDriverRig(g, cop) {
+  const shirt = new THREE.MeshLambertMaterial({
+    color: cop ? 0x27324e : new THREE.Color().setHSL(Math.random(), 0.45, 0.35 + Math.random() * 0.3) });
+  const skin = new THREE.MeshLambertMaterial({ color: new THREE.Color().setHSL(0.08, 0.5, 0.5 + Math.random() * 0.2) });
+  const hairM = new THREE.MeshLambertMaterial({ color: new THREE.Color().setHSL(0.05 + Math.random() * 0.9, 0.3, 0.12 + Math.random() * 0.2) });
+  const d = new THREE.Group();
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.4, 0.22), shirt);
+  torso.position.y = 1.12; d.add(torso);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.24, 0.24), skin);
+  head.position.y = 1.46; d.add(head);
+  const hair = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.26), hairM);
+  hair.position.y = 1.6; d.add(hair);
+  for (const s of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.3), shirt);
+    arm.position.set(0.16 * s, 1.24, 0.18); d.add(arm);
+  }
+  d.position.set(0, 0, -0.35);
+  g.add(d);
+  return d;
+}
+function makeHeliBody(bodyColor, stripeColor) {
+  const g = new THREE.Group();
+  const bodyM = new THREE.MeshLambertMaterial({ color: bodyColor });
+  const stripeM = new THREE.MeshLambertMaterial({ color: stripeColor });
+  const darkM = new THREE.MeshLambertMaterial({ color: 0x14161c });
+  const glassM = new THREE.MeshLambertMaterial({ color: 0x1b2833, transparent: true, opacity: 0.5 });
+  // fuselage + nose (forward = +z, same as the cars)
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.15, 2.6), bodyM);
+  body.position.set(0, 1.15, 0.4); body.castShadow = true; g.add(body);
+  const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.72, 0.28, 2.62), stripeM);
+  stripe.position.set(0, 0.95, 0.4); g.add(stripe);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.85, 1.5), glassM);
+  nose.position.set(0, 1.12, 1.85); nose.castShadow = true; g.add(nose);
+  // tail boom + fin
+  const boom = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 2.6), bodyM);
+  boom.position.set(0, 1.3, -2.1); boom.castShadow = true; g.add(boom);
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.95, 0.55), bodyM);
+  fin.position.set(0, 1.7, -3.35); g.add(fin);
+  // skids + struts
+  for (const sx of [-1, 1]) {
+    const skid = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 3.4), darkM);
+    skid.position.set(0.62 * sx, 0.17, 0.2); g.add(skid);
+    for (const sz of [-1.1, 1.1]) {
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.55, 0.1), darkM);
+      strut.position.set(0.55 * sx, 0.45, sz); g.add(strut);
+    }
+  }
+  // translucent cabin: the pilot shows through
+  const glass = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.75, 1.9), glassM);
+  glass.position.set(0, 1.55, 0.35); g.add(glass);
+  // main rotor (two crossed blades)
+  const bladeM = new THREE.MeshLambertMaterial({ color: 0x2a2c30 });
+  const rotor = new THREE.Group();
+  rotor.position.set(0, 2.35, 0.3);
+  const b1 = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.05, 0.3), bladeM);
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(5.6, 0.05, 0.3), bladeM);
+  b2.rotation.y = Math.PI / 2;
+  rotor.add(b1, b2);
+  const hub = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.2, 0.25), bladeM);
+  rotor.add(hub);
+  g.add(rotor);
+  // tail rotor on the +x side of the fin, spinning around the x axis
+  const tailRotor = new THREE.Group();
+  tailRotor.position.set(0.28, 1.62, -3.35);
+  const t1 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 1.1, 0.3), bladeM);
+  const t2 = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.3, 1.1), bladeM);
+  tailRotor.add(t1, t2);
+  g.add(tailRotor);
+  scene.add(g);
+  return { g, rotor, tailRotor };
+}
+function makePadTexture() {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g2 = c.getContext('2d');
+  g2.clearRect(0, 0, 128, 128);
+  g2.fillStyle = '#2b2e33';
+  g2.beginPath(); g2.arc(64, 64, 62, 0, Math.PI * 2); g2.fill();
+  g2.strokeStyle = '#d8c22a'; g2.lineWidth = 6;
+  g2.beginPath(); g2.arc(64, 64, 52, 0, Math.PI * 2); g2.stroke();
+  g2.fillStyle = '#d8c22a';
+  g2.font = 'bold 68px sans-serif';
+  g2.textAlign = 'center'; g2.textBaseline = 'middle';
+  g2.fillText('H', 64, 68);
+  return new THREE.CanvasTexture(c);
+}
+const HELI_PADS = [[68, 98, 0], [128, 158, 0]];   // [x, z, heading] mid-road-segment
+function spawnHelis() {
+  const padTex = makePadTexture();
+  for (let i = 0; i < HELI_PADS.length; i++) {
+    const [px, pz, ph] = HELI_PADS[i];
+    const pad = new THREE.Mesh(new THREE.CircleGeometry(5.2, 40),
+      new THREE.MeshLambertMaterial({ map: padTex, transparent: true }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(px, 3.02, pz);
+    scene.add(pad);
+    const car = {
+      heli: true, parked: true, police: false,
+      x: px, z: pz, gy: 3, vy: 0, speed: 0, rotorSpd: 4,
+      driver: null, g: null,
+      ri: 0, rz: 0, dir: [1, 0], fx: 0, fz: 0, tx: 0, tz: 0,
+      cruise: 0, stopAt: 0, stopped: false, stopT: 0,
+    };
+    const h = makeHeliBody(i === 0 ? 0xd8d8d8 : 0x3a7d44, i === 0 ? 0xc0392b : 0xe8e8e8);
+    car.g = h.g; car.rotor = h.rotor; car.tailRotor = h.tailRotor;
+    car.g.position.set(px, 3 - 0.045, pz);
+    car.g.rotation.y = ph;
+    car.driver = makeDriverRig(car.g, false);
+    car.driver.position.set(0, 0.55, 0.4);
+    cars.push(car);
+  }
 }
 function setupCarLeg(car) {
   // map edge: a leg along +dir from the outermost road would leave the world
@@ -1144,21 +1360,34 @@ function spawnCars(n) {
       x: 0, z: 0, fx: 0, fz: 0, tx: 0, tz: 0,
       speed: 0, cruise: 7 + Math.random() * 3.5,
       stopAt: 0, stopped: false, stopT: 0,
+      parked: false, gy: undefined, driver: null,
+      police: cars.filter(c => c.police).length < 3,   // keep a beat of 3
       g: null,
     };
     setupCarLeg(car);
     const t = Math.random();
     car.x = car.fx + (car.tx - car.fx) * t;
     car.z = car.fz + (car.tz - car.fz) * t;
-    car.g = makeCarBody(CAR_COLORS[ri(0, CAR_COLORS.length - 1)]);
+    car.g = makeCarBody(CAR_COLORS[ri(0, CAR_COLORS.length - 1)], car.police);
+    car.driver = car.police ? makeDriverRig(car.g, true)
+      : (Math.random() < 0.8 ? makeDriverRig(car.g) : null);
     cars.push(car);
   }
 }
 function updateCars(dt) {
   for (const car of cars) {
+    if (car.parked || car === drivingCar) continue;
+    if (car.police && wanted > 0) { policePursuit(car, dt); continue; }
     const dx = car.tx - car.x, dz = car.tz - car.z;
     const dist = Math.hypot(dx, dz);
     let v = car.cruise;
+    // yield to stolen / parked cars and the player on foot
+    for (const o of cars) {
+      if (o === car || !o.parked) continue;
+      if (Math.hypot(o.x - car.x, o.z - car.z) < 3.4) v = 0;
+    }
+    if (drivingCar && Math.hypot(drivingCar.x - car.x, drivingCar.z - car.z) < 3.6) v = 0;
+    if (!drivingCar && Math.hypot(player.pos.x - car.x, player.pos.z - car.z) < 2.2) v = 0;
     if (car.stopAt > 0) {
       if (car.stopped) { car.stopT -= dt; if (car.stopT <= 0) { car.stopAt = 0; car.stopped = false; } else v = 0; }
       else if (dist < car.stopAt) { car.stopped = true; v = 0; }
@@ -1175,7 +1404,10 @@ function updateCars(dt) {
       car.x += dx / dist * car.speed * dt;
       car.z += dz / dist * car.speed * dt;
     }
-    car.g.position.set(car.x, 2, car.z);
+    // AI drivers are not careful
+    for (const p of peds.slice())
+      if (Math.hypot(p.x - car.x, p.z - car.z) < 1.4) flingPed(p, car);
+    car.g.position.set(car.x, 2.955, car.z);   // wheel bottoms land on road top (y=3)
     const targetYaw = Math.atan2(car.dir[0], car.dir[1]);
     let dy = targetYaw - car.g.rotation.y;
     while (dy > Math.PI) dy -= Math.PI * 2;
@@ -1184,8 +1416,396 @@ function updateCars(dt) {
   }
 }
 
+/* ================================================================
+ * carjacking: E to steal a car and drive it (arcade physics)
+ * ================================================================ */
+let drivingCar = null, nearCar = null, respawnT = 15, pedRespawnT = 10;
+let wanted = 0, wantedT = 0, lastWanted = 0, busted = false, bustTextT = 0;
+const ejected = [];
+const bustedEl = document.getElementById('busted');
+
+function addWanted(n = 1) {
+  wanted = Math.min(3, wanted + n);
+  wantedT = 25;
+}
+function pushEject(e) {
+  ejected.push(e);
+  if (ejected.length > 30) {
+    const i = ejected.findIndex(x => !x.isPlayer);
+    if (i >= 0) { scene.remove(ejected[i].g); ejected.splice(i, 1); }
+  }
+}
+
+function groundTopAt(x, z) {
+  for (let y = 0; y < 40; y++)
+    if (solid(getB(x, y, z)) && !solid(getB(x, y + 1, z))) return y + 1;
+  return 3;
+}
+// what a descending heli lands on: top of the highest surface below it (roofs included)
+function heliGroundAt(x, z, gy) {
+  for (let y = Math.min(40, Math.floor(gy)); y >= 0; y--)
+    if (solid(getB(x, y, z))) return y + 1;
+  return 3;
+}
+function findNearCar() {
+  let best = null, bd = 3.4;
+  for (const c of cars) {
+    if (c.police) continue;   // no stealing police cars
+    const d = Math.hypot(c.x - player.pos.x, c.z - player.pos.z);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+function enterCar(car) {
+  if (!car) return;
+  drivingCar = car;
+  car.parked = false;
+  car.stopAt = 0; car.stopped = false;   // keep momentum
+  rig.g.visible = false;
+  player.pos.set(car.x, car.gy ?? groundTopAt(Math.floor(car.x), Math.floor(car.z)), car.z);
+  player.yaw = car.g.rotation.y;
+  player.vel.set(0, 0, 0);
+}
+function exitCar() {
+  const car = drivingCar; drivingCar = null;
+  if (car.heli) {
+    const gy = heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy);
+    if (car.gy > gy + 0.4) {
+      // airborne: you get flung out with the momentum, heli glides down alone
+      car.parked = true;
+      const h = car.g.rotation.y, fx = Math.sin(h), fz = Math.cos(h);
+      const rx = -fz, rz = fx;
+      rig.g.visible = true;
+      rig.g.position.set(car.x, car.gy + 1.2, car.z);
+      for (const part of [rig.legL, rig.legR, rig.armL, rig.armR]) part.rotation.x = 0;
+      pushEject({
+        g: rig.g,
+        v: new THREE.Vector3(fx * car.speed * 0.5 - rx * 2.5, 1.5 + (car.vy || 0) * 0.4, fz * car.speed * 0.5 - rz * 2.5),
+        w: new THREE.Vector3(4, 6, 4),
+        settled: false, isPlayer: true,
+      });
+      player.pos.set(car.x, car.gy, car.z);
+      return;
+    }
+  }
+  car.parked = true; car.speed = 0;
+  const h = car.g.rotation.y, fx = Math.sin(h), fz = Math.cos(h);
+  const rx = -fz, rz = fx;
+  let placed = false;
+  const maxPlaceY = car.heli ? car.gy + 1 : 6;   // helis may be on rooftops
+  for (const s of [1, -1]) {
+    const ex = car.x + rx * 2.4 * s, ez = car.z + rz * 2.4 * s;
+    const y = groundTopAt(Math.floor(ex), Math.floor(ez));
+    player.pos.set(ex, y, ez);
+    if (y < maxPlaceY && !collides(ex, y, ez)) { placed = true; break; }
+  }
+  if (!placed) player.pos.set(car.x, groundTopAt(Math.floor(car.x), Math.floor(car.z)), car.z);
+  player.vel.set(0, 0, 0);
+  player.onGround = true;
+  rig.g.visible = true;
+}
+// E key / X button: throw driver out, then steal / get out
+function doInteract() {
+  if (!playing) return;
+  if (drivingCar) exitCar();
+  else if (nearCar) {
+    if (nearCar.driver) { ejectDriver(nearCar); nearCar.parked = true; addWanted(1); }
+    else enterCar(nearCar);
+  }
+}
+// fling the driver/pilot out (GTA1 style carjacking)
+function ejectDriver(car) {
+  const d = car.driver;
+  car.driver = null;
+  if (!d) return;
+  const h = car.g.rotation.y;
+  const fx = Math.sin(h), fz = Math.cos(h);
+  const rx = -fz, rz = fx;
+  car.g.updateMatrixWorld();
+  const sp = car.speed || 0;
+  const seat = car.heli ? new THREE.Vector3(0, 1.7, 0.4) : new THREE.Vector3(0, 1.1, -0.35);
+  d.position.copy(car.g.localToWorld(seat));
+  d.removeFromParent();
+  scene.add(d);
+  pushEject({
+    g: d,
+    v: new THREE.Vector3(
+      fx * sp * 0.4 - rx * 3,
+      (car.heli ? 1.5 : 2.5) + Math.random() * 1.5 + (car.vy || 0) * (car.heli ? 0.5 : 0),
+      fz * sp * 0.4 - rz * 3),
+    w: new THREE.Vector3((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 7),
+    settled: false,
+  });
+}
+function updateEjected(dt) {
+  for (const e of ejected) {
+    if (e.settled) continue;
+    e.v.y -= 22 * dt;
+    e.g.position.addScaledVector(e.v, dt);
+    e.g.rotation.x += e.w.x * dt;
+    e.g.rotation.y += e.w.y * dt;
+    e.g.rotation.z += e.w.z * dt;
+    const gy = groundTopAt(Math.floor(e.g.position.x), Math.floor(e.g.position.z));
+    if (e.g.position.y <= gy) {
+      e.settled = true;
+      e.g.position.y = gy + 0.1;
+      e.g.rotation.x = -Math.PI / 2;
+      if (e.isPlayer) {
+        // back on your feet: control returns
+        e.g.rotation.set(0, player.yaw, 0);
+        player.pos.set(e.g.position.x, gy, e.g.position.z);
+        player.vel.set(0, 0, 0);
+        player.onGround = true;
+        busted = false;
+        bustTextT = 2;
+      }
+    }
+  }
+}
+// police: wanted stars, pursuit, busts
+function copRetreat(car) {
+  car.ri = ri(0, 4); car.rz = ri(0, 4);
+  car.x = ROAD_C(car.ri); car.z = ROAD_C(car.rz);
+  setupCarLeg(car);
+  car.speed = 0; car.stuckT = 0; car.bustT = 0;
+  car.g.rotation.y = Math.atan2(car.dir[0], car.dir[1]);
+}
+function bustPlayer(fromX, fromZ) {
+  if (busted) return;
+  busted = true;
+  const car = drivingCar;
+  if (car) {
+    if (car.heli) car.parked = true;   // the chopper flies off and lands on its own
+    else {   // car impounded
+      const ci = cars.indexOf(car);
+      if (ci >= 0) cars.splice(ci, 1);
+      scene.remove(car.g);
+    }
+    drivingCar = null;
+  }
+  let dx = player.pos.x - fromX, dz = player.pos.z - fromZ;
+  const d = Math.hypot(dx, dz) || 1;
+  rig.g.visible = true;
+  rig.g.position.set(player.pos.x, player.pos.y, player.pos.z);
+  for (const part of [rig.legL, rig.legR, rig.armL, rig.armR]) part.rotation.x = 0;
+  pushEject({
+    g: rig.g,
+    v: new THREE.Vector3(dx / d * 4, 3, dz / d * 4),
+    w: new THREE.Vector3(4, 6, 4),
+    settled: false, isPlayer: true,
+  });
+  wanted = 0; wantedT = 0;
+}
+function policePursuit(car, dt) {
+  const g = car.g;
+  const dx = player.pos.x - car.x, dz = player.pos.z - car.z;
+  const dist = Math.hypot(dx, dz);
+  const wantYaw = Math.atan2(dx, dz);
+  let dy = wantYaw - g.rotation.y;
+  dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  g.rotation.y += THREE.MathUtils.clamp(dy, -2.6 * dt, 2.6 * dt);
+  const h = g.rotation.y, fx = Math.sin(h), fz = Math.cos(h);
+  const targetV = (drivingCar || dist > 8) ? 19 : 0;
+  car.speed += (targetV - car.speed) * Math.min(1, 3 * dt);
+  const nx = car.x + fx * car.speed * dt, nz = car.z + fz * car.speed * dt;
+  const rx = -fz, rz = fx;
+  let blocked = false;
+  for (const [ox, oz] of CAR_PTS) {
+    const wx = nx + fx * oz + rx * ox, wz = nz + fz * oz + rz * ox;
+    for (let y = 4; y < 6 && !blocked; y++)
+      if (solid(getB(Math.floor(wx), y, Math.floor(wz)))) blocked = true;
+    if (blocked) break;
+  }
+  if (!blocked) for (const o of cars)
+    if (o !== car && Math.abs((o.gy ?? 3) - 3) < 3.2 && Math.hypot(o.x - nx, o.z - nz) < 2.8) { blocked = true; break; }
+  if (blocked) {
+    car.speed = 0;
+    car.stuckT = (car.stuckT || 0) + dt;
+    if (car.stuckT > 1.2) { car.stuckT = 0; g.rotation.y += Math.PI / 2; }
+  } else {
+    car.x = THREE.MathUtils.clamp(nx, 4, WORLD - 4);
+    car.z = THREE.MathUtils.clamp(nz, 4, WORLD - 4);
+    car.stuckT = 0;
+  }
+  // bust: ram the driven player, or sit on the foot player until they freeze
+  if (drivingCar) {
+    if (dist < 3.2 && car.speed > 4) bustPlayer(car.x, car.z);
+  } else {
+    if (dist < 3.5) {
+      car.bustT = (car.bustT || 0) + dt;
+      if (car.bustT > 1.5) bustPlayer(car.x, car.z);
+    } else car.bustT = 0;
+  }
+  const gy = groundTopAt(Math.floor(car.x), Math.floor(car.z));
+  car.gy = (car.gy ?? gy) + (gy - (car.gy ?? gy)) * Math.min(1, 8 * dt);
+  g.position.set(car.x, car.gy - 0.045, car.z);
+}
+// driverless parked cars coast to a stop
+function coastCar(car, dt) {
+  if (!car.speed) {
+    // a parked heli in the air still has to come down
+    if (!car.heli || car.gy <= heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy)) return;
+  }
+  car.speed -= (car.speed || 0) * 2.5 * dt;
+  if (!car.heli && Math.abs(car.speed) < 0.15) { car.speed = 0; return; }
+  const h = car.g.rotation.y, fx = Math.sin(h), fz = Math.cos(h);
+  car.x = THREE.MathUtils.clamp(car.x + fx * car.speed * dt, 4, WORLD - 4);
+  car.z = THREE.MathUtils.clamp(car.z + fz * car.speed * dt, 4, WORLD - 4);
+  if (car.heli) {
+    // pilotless chopper glides down and settles where it stops
+    const gy = heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy);
+    car.gy = car.gy > gy ? Math.max(gy, car.gy - 6 * dt) : gy;
+  } else {
+    const gy = groundTopAt(Math.floor(car.x), Math.floor(car.z));
+    car.gy = (car.gy ?? gy) + (gy - (car.gy ?? gy)) * Math.min(1, 8 * dt);
+  }
+  car.g.position.set(car.x, car.gy - 0.045, car.z);
+}
+const CAR_PTS = [[0, 0], [1, 1.7], [-1, 1.7], [1, -1.7], [-1, -1.7]];
+// helicopter flight: W/S up-down, A/D turn, Shift forward, Space brake
+function updateFlying(dt) {
+  const car = drivingCar, g = car.g, k = keys;
+  const up = k['KeyW'] || k['ArrowUp'];
+  const down = k['KeyS'] || k['ArrowDown'];
+  const steer = ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0) - ((k['KeyD'] || k['ArrowRight']) ? 1 : 0);
+  const throttle = k['ShiftLeft'] || k['ShiftRight'];
+  const hand = k['Space'];
+  car.vy = car.vy ?? 0; car.gy = car.gy ?? 3;
+  const maxV = 30;
+  if (throttle) car.speed += 10 * dt * Math.max(0.2, 1 - car.speed / maxV);
+  else car.speed -= car.speed * 0.8 * dt;
+  if (hand) car.speed -= car.speed * 5 * dt;
+  car.speed = THREE.MathUtils.clamp(car.speed, 0, maxV);
+  // vertical: W up, S down
+  const vT = up ? 7 : down ? -9 : 0;
+  car.vy += (vT - car.vy) * Math.min(1, 5 * dt);
+
+  const heading = g.rotation.y + steer * (0.6 + Math.min(1, car.speed * 0.08)) * 2.2 * dt;
+  const fx = Math.sin(heading), fz = Math.cos(heading);
+  const nx = THREE.MathUtils.clamp(car.x + fx * car.speed * dt, 4, WORLD - 4);
+  const nz = THREE.MathUtils.clamp(car.z + fz * car.speed * dt, 4, WORLD - 4);
+  let blocked = false;
+  const y0 = Math.floor(car.gy);
+  for (const [ox, oz] of CAR_PTS) {
+    const wx = nx + fx * oz + (-fz) * ox, wz = nz + fz * oz + fx * ox;
+    for (let y = y0; y < y0 + 3 && !blocked; y++)
+      if (solid(getB(Math.floor(wx), y, Math.floor(wz)))) blocked = true;
+    if (blocked) break;
+  }
+  if (!blocked) for (const o of cars) {
+    if (o === car || !o.g) continue;
+    if (Math.abs((o.gy ?? 3) - car.gy) > 3.2) continue;
+    if (Math.hypot(o.x - nx, o.z - nz) < 2.9) { blocked = true; break; }
+  }
+  if (blocked) {
+    if (car.speed > 8) spawnDebris(car.x + fx * 1.6, car.gy, car.z + fz * 1.6, 0x888888);
+    car.speed *= -0.3;
+  } else { car.x = nx; car.z = nz; }
+
+  // vertical integration + landing
+  const ground = heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy);
+  let gy = car.gy + car.vy * dt;
+  if (gy <= ground) {
+    if (car.vy < -12 && car.gy > ground + 3)
+      spawnDebris(car.x, ground + 0.5, car.z, 0x9a9a92);   // hard landing
+    gy = ground; car.vy = 0;
+  }
+  car.gy = gy;
+  g.rotation.y = heading;
+  g.position.set(car.x, car.gy - 0.045, car.z);
+  car.rotorSpd = (car.rotorSpd ?? 4) + (((throttle || car.speed > 1) ? 42 : 8) - (car.rotorSpd ?? 4)) * Math.min(1, 3 * dt);
+
+  // pedestrians: only when low and fast
+  if (car.gy < 8) for (const p of peds.slice())
+    if (Math.hypot(p.x - car.x, p.z - car.z) < 2.2 && Math.abs(p.y - car.gy) < 3) flingPed(p, car);
+
+  // keep player state in sync
+  player.pos.set(car.x, car.gy, car.z);
+  player.yaw = heading; player.pitch = 0.1;
+  player.onGround = car.gy <= ground + 0.01; player.speed = car.speed;
+  player.vel.set(0, 0, 0);
+
+  // follow camera
+  const ck = 1 - Math.exp(-6 * dt);
+  camera.position.x += (car.x - fx * 8 - camera.position.x) * ck;
+  camera.position.y += (car.gy + 4.2 - camera.position.y) * ck;
+  camera.position.z += (car.z - fz * 8 - camera.position.z) * ck;
+  camera.lookAt(car.x + fx * 7, car.gy + 2, car.z + fz * 7);
+  const fovT = 74 + car.speed * 0.9;
+  camera.fov += (fovT - camera.fov) * Math.min(1, 8 * dt);
+  camera.updateProjectionMatrix();
+}
+function updateDriving(dt) {
+  if (drivingCar.heli) { updateFlying(dt); return; }
+  const car = drivingCar, g = car.g, k = keys;
+  const throttle = k['KeyW'] || k['ArrowUp'];
+  const brake = k['KeyS'] || k['ArrowDown'];
+  const steer = ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0) - ((k['KeyD'] || k['ArrowRight']) ? 1 : 0);
+  const boost = k['ShiftLeft'] || k['ShiftRight'];
+  const hand = k['Space'];
+  const maxV = boost ? 24 : 15;
+  if (throttle) car.speed += (car.speed < 0 ? 26 : 9) * dt * Math.max(0.15, 1 - car.speed / maxV);
+  else if (brake) car.speed -= (car.speed > 0 ? 22 : 5) * dt;
+  else car.speed -= car.speed * 1.1 * dt;
+  if (hand) car.speed -= car.speed * 6 * dt;
+  car.speed = THREE.MathUtils.clamp(car.speed, -5, maxV);
+
+  const heading = g.rotation.y + steer * Math.min(1, Math.abs(car.speed) / 5) * 1.9 * dt * Math.sign(car.speed || 1);
+  const fx = Math.sin(heading), fz = Math.cos(heading), rx = -fz, rz = fx;
+  const nx = THREE.MathUtils.clamp(car.x + fx * car.speed * dt, 4, WORLD - 4);
+  const nz = THREE.MathUtils.clamp(car.z + fz * car.speed * dt, 4, WORLD - 4);
+
+  // hit: walls / trees at block level + any other car
+  let blocked = false, rammed = false;
+  for (const [ox, oz] of CAR_PTS) {
+    const wx = nx + fx * oz + rx * ox, wz = nz + fz * oz + rz * ox;
+    for (let y = 4; y < 6 && !blocked; y++)
+      if (solid(getB(Math.floor(wx), y, Math.floor(wz)))) blocked = true;
+    if (blocked) break;
+  }
+  if (!blocked) for (const o of cars) {
+    if (o === car || !o.g) continue;
+    if (Math.abs((o.gy ?? 3) - (car.gy ?? 3)) > 3.2) continue;   // can't hit things far above/below
+    if (Math.hypot(o.x - nx, o.z - nz) < 2.7) { blocked = true; rammed = o.police; break; }
+  }
+  if (blocked) {
+    if (Math.abs(car.speed) > 7)
+      spawnDebris(car.x + fx * 1.6, 3, car.z + fz * 1.6, g.children[0].material.color.getHex());
+    if (rammed && Math.abs(car.speed) > 5) addWanted(1);   // crime: ramming the cops
+    car.speed *= -0.3;
+  } else { car.x = nx; car.z = nz; }
+
+  // pedestrians: the car barely notices
+  for (const p of peds.slice()) {
+    if (Math.hypot(p.x - car.x, p.z - car.z) < 1.7) { flingPed(p, car); car.speed *= 0.88; }
+  }
+
+  // snap to the ground (curbs, sidewalks): wheels ride the surface
+  const gy = groundTopAt(Math.floor(car.x), Math.floor(car.z));
+  car.gy = car.gy === undefined ? gy : car.gy + (gy - car.gy) * Math.min(1, 8 * dt);
+  g.rotation.y = heading;
+  g.position.set(car.x, car.gy - 0.045, car.z);
+
+  // keep player state in sync so sun / clouds / exit all work
+  player.pos.set(car.x, car.gy, car.z);
+  player.yaw = heading; player.pitch = 0.1;
+  player.onGround = true; player.speed = car.speed;
+  player.vel.set(0, 0, 0);
+
+  // follow camera
+  const ck = 1 - Math.exp(-6 * dt);
+  camera.position.x += (car.x - fx * 7 - camera.position.x) * ck;
+  camera.position.y += (car.gy + 3.4 - camera.position.y) * ck;
+  camera.position.z += (car.z - fz * 7 - camera.position.z) * ck;
+  camera.lookAt(car.x + fx * 6, car.gy + 2, car.z + fz * 6);
+  const fovT = 74 + Math.abs(car.speed) * 0.9;
+  camera.fov += (fovT - camera.fov) * Math.min(1, 8 * dt);
+  camera.updateProjectionMatrix();
+}
+
 spawnPeds(26);
 spawnCars(15);
+spawnHelis();
 
 /* ================================================================
  * HUD + input
@@ -1194,8 +1814,72 @@ const overlay = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
 const statusEl = document.getElementById('status');
 const keys = {};
-document.addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Space') e.preventDefault(); });
-document.addEventListener('keyup', e => { keys[e.code] = false; });
+const kb = {};   // codes held via keyboard (gamepad polling must not stomp them)
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  kb[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyE') doInteract();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; kb[e.code] = false; });
+
+// ---- gamepad: synthetic codes merged into keys every frame ----------------
+// any XInput / DualShock / DualSense works; it activates itself when you press
+const PAD_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space'];
+let padPrev = null;
+function pollGamepad(dt) {
+  const pads = (typeof navigator !== 'undefined' && navigator.getGamepads)
+    ? navigator.getGamepads() : [];
+  const pad = pads.find(p => p && p.connected) || null;
+  const prev = padPrev;
+  padPrev = null;
+  if (!pad) {
+    if (prev) for (const c of PAD_CODES) keys[c] = !!kb[c];   // pad unplugged
+    return;
+  }
+  const b = i => pad.buttons[i] && pad.buttons[i].pressed;
+  const edge = i => b(i) && !(prev && prev[i]);
+  padPrev = pad.buttons.map(x => x.pressed);
+  const ax = i => { const v = pad.axes[i] || 0; return Math.abs(v) > 0.15 ? v : 0; };
+  const lx = ax(0), ly = ax(1), rx = ax(2), ry = ax(3);
+  const inCar = !!drivingCar, heli = inCar && drivingCar.heli;
+  for (const c of PAD_CODES) keys[c] = !!kb[c];
+  const set = c => { keys[c] = true; };
+  if (!inCar) {
+    // on foot: left stick move, right stick look, A jump
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (b(12)) set('KeyW'); if (b(13)) set('KeyS'); if (b(14)) set('KeyA'); if (b(15)) set('KeyD');
+    if (b(4)) set('ShiftLeft');            // L1 sprint
+    if (b(0)) set('Space');                // A jump (hold = auto-hop)
+    if (edge(2)) doInteract();             // X in/out of vehicle
+    if (edge(3) && playing) breakBlock();  // Y break block
+  } else if (heli) {
+    // heli: left stick = turn (X) + up/down (Y), A forward, B brake
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (b(0)) set('ShiftLeft');            // A throttle
+    if (b(1)) set('Space');                // B brake
+    if (edge(2)) doInteract();
+  } else {
+    // car: A gas, B brake/reverse, sticks steer
+    if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
+    if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
+    if (rx < 0) set('KeyA'); else if (rx > 0) set('KeyD');
+    if (b(0)) set('KeyW');                 // A gas
+    if (b(1)) set('KeyS');                 // B brake
+    if (b(4)) set('Space');                // L1 handbrake
+    if (b(5)) set('ShiftLeft');            // R1 boost
+    if (edge(2)) doInteract();
+  }
+  // right stick is the camera on foot (A = left stays true)
+  if (playing && !inCar) {
+    player.yaw += rx * 2.2 * dt;
+    player.pitch = THREE.MathUtils.clamp(player.pitch - ry * 1.8 * dt, -1.45, 1.45);
+  }
+  // Start pauses; unpausing needs a click (browsers won't let a pad grab the mouse)
+  if (edge(9) && playing) document.exitPointerLock();
+}
 
 overlay.addEventListener('click', () => {
   const c = renderer.domElement;
@@ -1208,9 +1892,9 @@ document.addEventListener('pointerlockchange', () => {
   statusEl.style.display = 'none';
 });
 document.addEventListener('mousemove', e => {
-  if (!playing) return;
+  if (!playing || drivingCar) return;
   player.yaw += e.movementX * 0.0023;
-  player.pitch = THREE.MathUtils.clamp(player.pitch + e.movementY * 0.0023, -1.45, 1.45);
+  player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0023, -1.45, 1.45);
 });
 let mouseDown = false, breakCooldown = 0;
 document.addEventListener('mousedown', e => {
@@ -1221,6 +1905,7 @@ document.addEventListener('mousedown', e => {
 document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; });
 
 let hudTimer = 0;
+const hintEl = document.getElementById('hint');
 function updateHud(dt) {
   hudTimer -= dt;
   if (hudTimer > 0) return;
@@ -1232,14 +1917,27 @@ function updateHud(dt) {
   statusEl.innerHTML =
     `<span style="color:#fff">${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}</span> ` +
     `${icons[w]} ${weather.word}` +
+    (wanted > 0 ? `<br><span style="color:#ffd75e">${'★'.repeat(wanted)}</span>` : '') +
     (mpApi ? `<br><span style="color:#7fd08a">👥 ${mpApi.onlineCount}</span>` : '');
   statusEl.style.display = playing ? 'block' : 'none';
   // aim highlight
-  const t = playing ? aimTarget() : null;
+  const t = playing && !drivingCar ? aimTarget() : null;
   if (t && DESTRUCTIBLE[getB(t.x, t.y, t.z)]) {
     hl.visible = true;
     hl.position.set(t.x + 0.5, t.y + 0.5, t.z + 0.5);
   } else hl.visible = false;
+  // context hint
+  let hint = '';
+  if (playing) {
+    if (drivingCar) hint = drivingCar.heli
+      ? 'W/\u2191 up \u00b7 S/\u2193 down \u00b7 A/D turn \u00b7 Shift fly forward \u00b7 Space brake \u00b7 E pilot out / get out'
+      : 'W/\u2191 drive \u00b7 S/\u2193 brake / reverse \u00b7 A/D steer \u00b7 Shift boost \u00b7 Space brake \u00b7 E get out';
+    else if (nearCar) hint = nearCar.driver
+      ? (nearCar.heli ? 'E \u2014 throw the pilot out' : 'E \u2014 throw the driver out')
+      : (nearCar.heli ? 'E \u2014 steal this helicopter' : 'E \u2014 steal this car');
+  }
+  hintEl.textContent = hint;
+  hintEl.style.display = hint ? 'block' : 'none';
 }
 
 /* ================================================================
@@ -1250,9 +1948,45 @@ function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min(0.05, (now - lastT) / 1000);
   lastT = now;
-  if (playing) {
-    updatePlayer(dt);
-    breakIfHeld(dt);
+  pollGamepad(dt);
+  if (playing && !busted) {
+    if (drivingCar) updateDriving(dt);
+    else { updatePlayer(dt); breakIfHeld(dt); }
+  }
+  nearCar = playing && !drivingCar && !busted ? findNearCar() : null;
+  // wanted level decays one star per clean 20 s
+  if (wanted > 0) { wantedT -= dt; if (wantedT <= 0) { wanted--; wantedT = 20; } }
+  if (wanted === 0 && lastWanted > 0)
+    for (const c of cars) if (c.police && !c.parked && c !== drivingCar) copRetreat(c);
+  lastWanted = wanted;
+  bustTextT -= dt;
+  bustedEl.style.display = bustTextT > 0 ? 'block' : 'none';
+  // police light bar
+  const now2 = performance.now();
+  const fl = wanted > 0 ? (Math.sin(now2 * 0.02) > 0 ? 1 : 0.12) : 0.3;
+  const fl2 = wanted > 0 ? (Math.sin(now2 * 0.02) > 0 ? 0.12 : 1) : 0.3;
+  policeRedM.color.setRGB(fl, fl * 0.04, fl * 0.06);
+  policeBlueM.color.setRGB(fl2 * 0.06, fl2 * 0.08, fl2);
+  for (const c of cars) {
+    if (c.heli) {
+      if (c !== drivingCar) c.rotorSpd = (c.rotorSpd ?? 4) + ((c.speed ? 24 : 4) - (c.rotorSpd ?? 4)) * Math.min(1, 2 * dt);
+      c.rotor.rotation.y += (c.rotorSpd ?? 4) * dt;
+      c.tailRotor.rotation.x += (c.rotorSpd ?? 4) * 0.9 * dt;
+    }
+    if (c.parked && c !== drivingCar) coastCar(c, dt);
+  }
+  updateEjected(dt);
+  respawnT -= dt;
+  if (respawnT <= 0) {
+    respawnT = 15;
+    let active = 0;
+    for (const c of cars) if (!c.parked && c !== drivingCar) active++;
+    if (active < 12 && cars.length < 24) spawnCars(1);
+  }
+  pedRespawnT -= dt;
+  if (pedRespawnT <= 0) {
+    pedRespawnT = 10;
+    if (peds.length < 26) spawnPeds(1);
   }
   updatePeds(dt);
   updateCars(dt);
