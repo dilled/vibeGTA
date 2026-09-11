@@ -56,3 +56,14 @@ implementation before loading large amounts of source code into context.
 - Update Brain when a durable architectural or project decision changes.
 - Update Graphify when the code structure changes substantially.
 <!-- END graphify -->
+<!-- BEGIN tokenix -->
+## Token-efficient source retrieval
+
+Prefer Tokenix for targeted source retrieval when it can answer the question
+without loading entire files or large command outputs.
+
+- Use Tokenix to retrieve the smallest relevant source context.
+- Use Graphify for architectural relationships, dependency traversal, and impact analysis.
+- Use Brain for durable project decisions and constraints.
+- Do not scan large parts of the repository when Tokenix can retrieve the relevant symbols or code chunks directly.
+<!-- END tokenix -->
