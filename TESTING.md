@@ -77,6 +77,8 @@ those manually.
       alternately
 - [ ] **Driving:** cop rams you at speed → BUSTED: red flash, you eject as a
       ragdoll, car is impounded (gone), stars cleared
+- [ ] **A flying heli is out of reach:** a cop driving under you at altitude
+      can never bust you (bust needs the player within ~2.5 m of cop height)
 - [ ] **On foot:** cop stops within arm's reach and holds ~1.5 s → BUSTED
 - [ ] After bust / star decay: cops reposition to intersections, no more
       chasing; light bar stops flashing
@@ -86,7 +88,17 @@ those manually.
       slowly idling rotors; pilots visible through the cabin glass
 - [ ] E → pilot flies out as an aerial ragdoll (+1 wanted); E again → you're
       the pilot, rotors spin up
-- [ ] W/S ascend/descend; A/D turn; Shift flies forward; Space brakes
+- [ ] W/S ascend/descend; A/D turn; mouse-up flies; **Shift = boost**
+      (harder accel, top speed 24 → 40); Space/mouse-down brake + reverse
+- [ ] **Mouse / right stick also flies it:** left/right steers, up = forward,
+      down = brake then reverse; A/D, Shift and Space still work alongside
+- [ ] **Throttle latches:** flick the mouse up once and the heli holds that
+      speed with the mouse still — it does not decay; moving the mouse back
+      down brakes/reverses. Steering auto-centers when you stop moving
+- [ ] **Lean:** the chopper banks into turns and **dives nose-down with
+      forward speed** — verify at a heading other than the one you started in
+      (a yaw bug made the pitch only work along one axis);
+      it levels out when you exit or it becomes pilotless
 - [ ] Flying into a building bounces you off with debris; flying over
       buildings at altitude does **not** clip them
 - [ ] You can land on streets, lots **and rooftops** (ground query sees roofs)

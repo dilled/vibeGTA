@@ -1239,6 +1239,9 @@ function makeDriverRig(g, cop) {
 }
 function makeHeliBody(bodyColor, stripeColor) {
   const g = new THREE.Group();
+  // YXZ: yaw outermost (world), pitch/roll in the body frame — with the
+  // default XYZ order the "nose down" pitch would only work at heading 0
+  g.rotation.order = 'YXZ';
   const bodyM = new THREE.MeshLambertMaterial({ color: bodyColor });
   const stripeM = new THREE.MeshLambertMaterial({ color: stripeColor });
   const darkM = new THREE.MeshLambertMaterial({ color: 0x14161c });
@@ -1304,6 +1307,17 @@ function makePadTexture() {
   return new THREE.CanvasTexture(c);
 }
 const HELI_PADS = [[68, 98, 0], [128, 158, 0]];   // [x, z, heading] mid-road-segment
+// the pads are pure decoration (same world for everyone) — drawn even in MP
+function makeHeliPads() {
+  const padTex = makePadTexture();
+  for (const [px, pz, ph] of HELI_PADS) {
+    const pad = new THREE.Mesh(new THREE.CircleGeometry(5.2, 40),
+      new THREE.MeshLambertMaterial({ map: padTex, transparent: true }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(px, 3.02, pz);
+    scene.add(pad);
+  }
+}
 function spawnHelis() {
   const padTex = makePadTexture();
   for (let i = 0; i < HELI_PADS.length; i++) {
@@ -1421,10 +1435,20 @@ function updateCars(dt) {
  * ================================================================ */
 let drivingCar = null, nearCar = null, respawnT = 15, pedRespawnT = 10;
 let wanted = 0, wantedT = 0, lastWanted = 0, busted = false, bustTextT = 0;
+// multiplayer: the server masters all traffic (cars, peds, helis, police).
+// MP is set before the first frame whenever the page was loaded with ?mp=.
+const MP = !!new URLSearchParams(location.search).get('mp');
+let mpSynced = false;          // world sync (roster) received
+let mpWanted = 0;              // server-stamped wanted level
+let mpGranted = 0xFFFF;        // vehicleId the server actually granted
+let mpRequested = null;        // vehicleId we asked to control (pending)
+const mpVehicles = new Map(); // vehicleId -> latest server snapshot
+const mpPeds = new Map();     // pedId -> latest server snapshot
 const ejected = [];
 const bustedEl = document.getElementById('busted');
 
 function addWanted(n = 1) {
+  if (MP) return;   // the server tracks wanted (it is the one committing)
   wanted = Math.min(3, wanted + n);
   wantedT = 25;
 }
@@ -1461,6 +1485,7 @@ function enterCar(car) {
   drivingCar = car;
   car.parked = false;
   car.stopAt = 0; car.stopped = false;   // keep momentum
+  heliStick.x = 0; heliStick.y = 0;
   rig.g.visible = false;
   player.pos.set(car.x, car.gy ?? groundTopAt(Math.floor(car.x), Math.floor(car.z)), car.z);
   player.yaw = car.g.rotation.y;
@@ -1468,6 +1493,7 @@ function enterCar(car) {
 }
 function exitCar() {
   const car = drivingCar; drivingCar = null;
+  if (MP) { mpApi.releaseVehicle(); mpRequested = null; }
   if (car.heli) {
     const gy = heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy);
     if (car.gy > gy + 0.4) {
@@ -1480,7 +1506,7 @@ function exitCar() {
       for (const part of [rig.legL, rig.legR, rig.armL, rig.armR]) part.rotation.x = 0;
       pushEject({
         g: rig.g,
-        v: new THREE.Vector3(fx * car.speed * 0.5 - rx * 2.5, 1.5 + (car.vy || 0) * 0.4, fz * car.speed * 0.5 - rz * 2.5),
+        v: new THREE.Vector3(fx * car.speed * 0.5 - rx * 2.5 + fz * (car.vs ?? 0) * 0.5, 1.5 + (car.vy || 0) * 0.4, fz * car.speed * 0.5 - rz * 2.5 - fx * (car.vs ?? 0) * 0.5),
         w: new THREE.Vector3(4, 6, 4),
         settled: false, isPlayer: true,
       });
@@ -1509,7 +1535,13 @@ function doInteract() {
   if (!playing) return;
   if (drivingCar) exitCar();
   else if (nearCar) {
-    if (nearCar.driver) { ejectDriver(nearCar); nearCar.parked = true; addWanted(1); }
+    if (MP) {
+      // the server grants (distance, not police, not already driven) and
+      // ejects the AI driver if there is one; we enter when granted
+      mpRequested = nearCar.mpId;
+      mpApi.requestVehicle(nearCar.mpId);
+    }
+    else if (nearCar.driver) { ejectDriver(nearCar); nearCar.parked = true; addWanted(1); }
     else enterCar(nearCar);
   }
 }
@@ -1628,10 +1660,12 @@ function policePursuit(car, dt) {
     car.stuckT = 0;
   }
   // bust: ram the driven player, or sit on the foot player until they freeze
+  // — but only at player altitude: the cops can't reach a flying heli
+  const bustReach = Math.abs(player.pos.y - (car.gy ?? 3)) < 2.5;
   if (drivingCar) {
-    if (dist < 3.2 && car.speed > 4) bustPlayer(car.x, car.z);
+    if (dist < 3.2 && car.speed > 4 && bustReach) bustPlayer(car.x, car.z);
   } else {
-    if (dist < 3.5) {
+    if (dist < 3.5 && bustReach) {
       car.bustT = (car.bustT || 0) + dt;
       if (car.bustT > 1.5) bustPlayer(car.x, car.z);
     } else car.bustT = 0;
@@ -1639,6 +1673,163 @@ function policePursuit(car, dt) {
   const gy = groundTopAt(Math.floor(car.x), Math.floor(car.z));
   car.gy = (car.gy ?? gy) + (gy - (car.gy ?? gy)) * Math.min(1, 8 * dt);
   g.position.set(car.x, car.gy - 0.045, car.z);
+}
+/* ================================================================
+ * multiplayer traffic: the server sim owns every car, cop, heli and
+ * ped — the client renders snapshots (lerped) and only simulates its
+ * own player + the vehicle it controls
+ * ================================================================ */
+function removeMpVehicle(c) {
+  const i = cars.indexOf(c);
+  if (i >= 0) cars.splice(i, 1);
+  scene.remove(c.g);
+}
+function mpWorldSync(vehicles, peds) {
+  const oldDriving = drivingCar;
+  // wipe whatever local traffic existed (single-player spawns or an old
+  // sync) — the server roster is the world
+  for (const c of cars) if (c.g) scene.remove(c.g);
+  cars.length = 0;
+  for (const p of peds) if (p.rig) scene.remove(p.rig.g);
+  peds.length = 0;
+  mpVehicles.clear();
+  mpPeds.clear();
+  for (const v of vehicles) {
+    let car;
+    if (v.type === 2) {   // helicopter
+      const i = v.colorIdx;
+      car = {
+        heli: true, parked: true, police: false, mpId: v.id,
+        x: v.x, z: v.z, gy: v.y, vy: 0, speed: 0, rotorSpd: 4,
+        driver: null,
+      };
+      const h = makeHeliBody(i === 0 ? 0xd8d8d8 : 0x3a7d44, i === 0 ? 0xc0392b : 0xe8e8e8);
+      car.g = h.g; car.rotor = h.rotor; car.tailRotor = h.tailRotor;
+      if (v.hasDriver) { car.driver = makeDriverRig(car.g, false); car.driver.position.set(0, 0.55, 0.4); }
+    } else {
+      car = {
+        police: v.type === 1, mpId: v.id,
+        x: v.x, z: v.z, gy: v.y, speed: 0, parked: false,
+        driver: null,
+      };
+      car.g = makeCarBody(CAR_COLORS[v.colorIdx % CAR_COLORS.length], car.police);
+      if (v.hasDriver) car.driver = makeDriverRig(car.g, car.police);
+    }
+    car.g.position.set(car.x, v.y - 0.045, v.z);
+    car.g.rotation.y = v.heading;
+    cars.push(car);
+    mpVehicles.set(v.id, v);
+  }
+  for (const p of peds) {
+    const ped = {
+      mpId: p.id, x: p.x, z: p.z, y: p.y,
+      facing: 0, phase: Math.random() * 10,
+      rig: makePedRig(),
+    };
+    ped.rig.g.position.set(ped.x, ped.y, ped.z);
+    peds.push(ped);
+    mpPeds.set(p.id, p);
+  }
+  mpSynced = true;
+  // re-adopt the vehicle we drive (a reconnect re-syncs the world)
+  if (oldDriving) {
+    const nc = cars.find(c => c.mpId === oldDriving.mpId);
+    if (nc) {
+      nc.x = oldDriving.x; nc.z = oldDriving.z;
+      nc.gy = oldDriving.gy ?? nc.gy; nc.speed = oldDriving.speed;
+      nc.g.rotation.y = oldDriving.g.rotation.y;
+      drivingCar = nc;
+    } else {
+      drivingCar = null;
+      rig.g.visible = true;
+    }
+  }
+}
+function mpVehiclesTick(list) {
+  const seen = new Set();
+  for (const v of list) { mpVehicles.set(v.id, v); seen.add(v.id); }
+  for (const c of cars)
+    if (!seen.has(c.mpId) && c !== drivingCar &&
+        c.mpId !== mpGranted && c.mpId !== mpRequested) removeMpVehicle(c);
+}
+function mpPedsTick(list) {
+  const seen = new Set();
+  for (const p of list) { mpPeds.set(p.id, p); seen.add(p.id); }
+  for (const p of peds)
+    if (!seen.has(p.mpId)) { scene.remove(p.rig.g); peds.splice(peds.indexOf(p), 1); }
+}
+// the server's view of our own state: granted control + authoritative wanted
+function mpOwnState({ vehicleId, wanted }) {
+  mpGranted = vehicleId;
+  mpWanted = wanted;
+}
+function mpEvents(list) {
+  for (const e of list) {
+    if (e.kind === 1) {   // ped flung: ragdoll (reuse the ped's rig if we have it)
+      let g = null;
+      const i = peds.findIndex(p => p.mpId === e.a);
+      if (i >= 0) { const rp = peds.splice(i, 1)[0]; g = rp.rig.g; }
+      else { g = makePedRig().g; scene.add(g); }
+      g.position.set(e.x, e.y, e.z);
+      const a = Math.random() * Math.PI * 2, sp = e.extra * 0.4;
+      pushEject({
+        g,
+        v: new THREE.Vector3(Math.cos(a) * sp, 2 + Math.random() * 1.5, Math.sin(a) * sp),
+        w: new THREE.Vector3((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 7),
+        settled: false,
+      });
+    } else if (e.kind === 2) {   // driver/pilot ejected: reuse the car's own rig
+      let d = null;
+      const car = cars.find(c => c.mpId === e.a);
+      if (car && car.driver) { d = car.driver; car.driver = null; d.removeFromParent(); scene.add(d); }
+      if (!d) { const tmp = new THREE.Group(); d = makeDriverRig(tmp, false); scene.add(d); }
+      d.position.set(e.x, e.y + 0.3, e.z);
+      const a = Math.random() * Math.PI * 2, sp = e.extra * 0.4;
+      pushEject({
+        g: d,
+        v: new THREE.Vector3(Math.cos(a) * sp, 2.5 + Math.random() * 1.5, Math.sin(a) * sp),
+        w: new THREE.Vector3((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 9, (Math.random() - 0.5) * 7),
+        settled: false,
+      });
+    } else if (e.kind === 3) {   // vehicle gone (impounded)
+      const c = cars.find(c => c.mpId === e.a);
+      if (c) removeMpVehicle(c);
+    }
+  }
+}
+function mpClientEvents(list) {
+  for (const e of list) if (e.kind === 1) bustPlayer(e.x, e.z);   // BUSTED
+}
+// snapshots: lerp every server vehicle/ped toward its latest position
+function updateMpTraffic(dt) {
+  const k = 1 - Math.exp(-12 * dt);
+  const la = (a, b) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  for (const c of cars) {
+    const t = mpVehicles.get(c.mpId);
+    if (!t || c === drivingCar) continue;   // we drive ours
+    c.x += (t.x - c.x) * k;
+    c.z += (t.z - c.z) * k;
+    c.gy = t.y;
+    c.speed = t.speed;
+    c.g.rotation.y = la(c.g.rotation.y, t.heading);
+    c.g.position.set(c.x, c.gy - 0.045, c.z);
+  }
+  for (const p of peds) {
+    const t = mpPeds.get(p.mpId);
+    if (!t) continue;
+    const moved = Math.hypot(t.x - p.x, t.z - p.z);
+    p.x += (t.x - p.x) * k;
+    p.z += (t.z - p.z) * k;
+    p.y = t.y;
+    p.facing = la(p.facing, t.facing);
+    p.phase += moved * 4.4 * dt;
+    const walk = Math.min(1, moved / Math.max(dt, 1e-4) / 2);
+    const sw = Math.sin(p.phase) * 0.75 * walk;
+    p.rig.legL.rotation.x = sw; p.rig.legR.rotation.x = -sw;
+    p.rig.armL.rotation.x = -sw * 0.7; p.rig.armR.rotation.x = sw * 0.7;
+    p.rig.g.position.set(p.x, p.y, p.z);
+    p.rig.g.rotation.y = p.facing;
+  }
 }
 // driverless parked cars coast to a stop
 function coastCar(car, dt) {
@@ -1649,12 +1840,16 @@ function coastCar(car, dt) {
   car.speed -= (car.speed || 0) * 2.5 * dt;
   if (!car.heli && Math.abs(car.speed) < 0.15) { car.speed = 0; return; }
   const h = car.g.rotation.y, fx = Math.sin(h), fz = Math.cos(h);
-  car.x = THREE.MathUtils.clamp(car.x + fx * car.speed * dt, 4, WORLD - 4);
-  car.z = THREE.MathUtils.clamp(car.z + fz * car.speed * dt, 4, WORLD - 4);
+  if (car.heli) car.vs = (car.vs ?? 0) * Math.max(0, 1 - 1.5 * dt);   // drift dies out
+  const lx = car.heli ? fz * (car.vs ?? 0) : 0, lz = car.heli ? -fx * (car.vs ?? 0) : 0;
+  car.x = THREE.MathUtils.clamp(car.x + (fx * car.speed + lx) * dt, 4, WORLD - 4);
+  car.z = THREE.MathUtils.clamp(car.z + (fz * car.speed + lz) * dt, 4, WORLD - 4);
   if (car.heli) {
     // pilotless chopper glides down and settles where it stops
     const gy = heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy);
     car.gy = car.gy > gy ? Math.max(gy, car.gy - 6 * dt) : gy;
+    car.g.rotation.z += (0 - car.g.rotation.z) * Math.min(1, 3 * dt);   // level out
+    car.g.rotation.x += (0 - car.g.rotation.x) * Math.min(1, 3 * dt);
   } else {
     const gy = groundTopAt(Math.floor(car.x), Math.floor(car.z));
     car.gy = (car.gy ?? gy) + (gy - (car.gy ?? gy)) * Math.min(1, 8 * dt);
@@ -1662,28 +1857,45 @@ function coastCar(car, dt) {
   car.g.position.set(car.x, car.gy - 0.045, car.z);
 }
 const CAR_PTS = [[0, 0], [1, 1.7], [-1, 1.7], [1, -1.7], [-1, -1.7]];
-// helicopter flight: W/S up-down, A/D turn, Shift forward, Space brake
+// heli control stick: mouse / right stick (x: steer, y: forward-back).
+// x auto-centers (spring), y latches — set the throttle once, it holds
+// until moved back. padXY tracks the pad's previous frame to detect release.
+const heliStick = { x: 0, y: 0 };
+let padHX = 0, padHY = 0;
+// helicopter flight: W/S up-down, A/D lean + drift sideways (no turn), mouse/right-stick turn,
+// Shift/mouse-up forward, Space/mouse-down brake+reverse
 function updateFlying(dt) {
   const car = drivingCar, g = car.g, k = keys;
   const up = k['KeyW'] || k['ArrowUp'];
   const down = k['KeyS'] || k['ArrowDown'];
-  const steer = ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0) - ((k['KeyD'] || k['ArrowRight']) ? 1 : 0);
-  const throttle = k['ShiftLeft'] || k['ShiftRight'];
+  const leanKey = ((k['KeyA'] || k['ArrowLeft']) ? 1 : 0) - ((k['KeyD'] || k['ArrowRight']) ? 1 : 0);
+  const boost = k['ShiftLeft'] || k['ShiftRight'];
   const hand = k['Space'];
   car.vy = car.vy ?? 0; car.gy = car.gy ?? 3;
-  const maxV = 30;
-  if (throttle) car.speed += 10 * dt * Math.max(0.2, 1 - car.speed / maxV);
-  else car.speed -= car.speed * 0.8 * dt;
-  if (hand) car.speed -= car.speed * 5 * dt;
-  car.speed = THREE.MathUtils.clamp(car.speed, 0, maxV);
+  const maxV = boost ? 40 : 24;
+  heliStick.x *= Math.exp(-2.5 * dt);   // steer auto-centers; throttle (y) latches
+  const steer = THREE.MathUtils.clamp(-heliStick.x, -1, 1);   // only mouse/right-stick turns
+  // forward: mouse/stick/pad-A throttle (Shift also flies, at boost power)
+  const fwd = THREE.MathUtils.clamp(Math.max(heliStick.y, 0, boost ? 1 : 0, k['HeliThrottle'] ? 1 : 0), 0, 1);
+  const back = Math.max(hand ? 1 : 0, -heliStick.y);
+  if (fwd > 0) car.speed += (boost ? 22 : 10) * fwd * dt * Math.max(0.2, 1 - car.speed / maxV);
+  else if (!back) car.speed -= car.speed * 0.8 * dt;
+  if (back > 0) {
+    if (car.speed > 0) car.speed = Math.max(0, car.speed - 22 * back * dt);   // brake
+    else car.speed = Math.max(-12, car.speed - 5 * back * dt);               // reverse
+  }
+  car.speed = THREE.MathUtils.clamp(car.speed, -12, maxV);
   // vertical: W up, S down
   const vT = up ? 7 : down ? -9 : 0;
   car.vy += (vT - car.vy) * Math.min(1, 5 * dt);
 
-  const heading = g.rotation.y + steer * (0.6 + Math.min(1, car.speed * 0.08)) * 2.2 * dt;
+  const heading = g.rotation.y + steer * (0.6 + Math.min(1, Math.abs(car.speed) * 0.08)) * 2.2 * dt * (car.speed < 0 ? -1 : 1);
   const fx = Math.sin(heading), fz = Math.cos(heading);
-  const nx = THREE.MathUtils.clamp(car.x + fx * car.speed * dt, 4, WORLD - 4);
-  const nz = THREE.MathUtils.clamp(car.z + fz * car.speed * dt, 4, WORLD - 4);
+  // A/D also drifts sideways (eased lateral speed, stops when released)
+  car.vs = THREE.MathUtils.clamp((car.vs ?? 0) + (leanKey * 9 - (car.vs ?? 0)) * Math.min(1, 4 * dt), -9, 9);
+  const lx = Math.cos(heading) * car.vs, lz = -Math.sin(heading) * car.vs;
+  const nx = THREE.MathUtils.clamp(car.x + fx * car.speed * dt + lx * dt, 4, WORLD - 4);
+  const nz = THREE.MathUtils.clamp(car.z + fz * car.speed * dt + lz * dt, 4, WORLD - 4);
   let blocked = false;
   const y0 = Math.floor(car.gy);
   for (const [ox, oz] of CAR_PTS) {
@@ -1712,11 +1924,18 @@ function updateFlying(dt) {
   }
   car.gy = gy;
   g.rotation.y = heading;
+  // visual lean: A/D leans left/right, bank into turns, nose forward with speed
+  const bank = -THREE.MathUtils.clamp(steer, -1, 1) * 0.35 * Math.min(1, Math.abs(car.speed) / 10)
+             + -leanKey * 0.3;
+  const tilt = fwd * 0.15 * Math.min(1, car.speed / 15) - back * 0.08 - (car.vy || 0) * 0.01;
+  const lk = Math.min(1, 5 * dt);
+  g.rotation.z += (bank - g.rotation.z) * lk;
+  g.rotation.x += (tilt - g.rotation.x) * lk;
   g.position.set(car.x, car.gy - 0.045, car.z);
-  car.rotorSpd = (car.rotorSpd ?? 4) + (((throttle || car.speed > 1) ? 42 : 8) - (car.rotorSpd ?? 4)) * Math.min(1, 3 * dt);
+  car.rotorSpd = (car.rotorSpd ?? 4) + (((fwd > 0 || boost || Math.abs(car.speed) > 1) ? 42 : 8) - (car.rotorSpd ?? 4)) * Math.min(1, 3 * dt);
 
-  // pedestrians: only when low and fast
-  if (car.gy < 8) for (const p of peds.slice())
+  // pedestrians: only when low and fast (MP: the server does the flinging)
+  if (car.gy < 8 && !MP) for (const p of peds.slice())
     if (Math.hypot(p.x - car.x, p.z - car.z) < 2.2 && Math.abs(p.y - car.gy) < 3) flingPed(p, car);
 
   // keep player state in sync
@@ -1731,7 +1950,7 @@ function updateFlying(dt) {
   camera.position.y += (car.gy + 4.2 - camera.position.y) * ck;
   camera.position.z += (car.z - fz * 8 - camera.position.z) * ck;
   camera.lookAt(car.x + fx * 7, car.gy + 2, car.z + fz * 7);
-  const fovT = 74 + car.speed * 0.9;
+  const fovT = Math.min(100, 74 + car.speed * 0.9);
   camera.fov += (fovT - camera.fov) * Math.min(1, 8 * dt);
   camera.updateProjectionMatrix();
 }
@@ -1775,8 +1994,9 @@ function updateDriving(dt) {
     car.speed *= -0.3;
   } else { car.x = nx; car.z = nz; }
 
-  // pedestrians: the car barely notices
-  for (const p of peds.slice()) {
+  // pedestrians: the car barely notices (in MP the server flings them and
+  // charges the wanted star, the event spawns the ragdoll on all clients)
+  if (!MP) for (const p of peds.slice()) {
     if (Math.hypot(p.x - car.x, p.z - car.z) < 1.7) { flingPed(p, car); car.speed *= 0.88; }
   }
 
@@ -1803,9 +2023,14 @@ function updateDriving(dt) {
   camera.updateProjectionMatrix();
 }
 
-spawnPeds(26);
-spawnCars(15);
-spawnHelis();
+if (MP) {
+  // server owns the roster: only the helipad decoration is local
+  makeHeliPads();
+} else {
+  spawnPeds(26);
+  spawnCars(15);
+  spawnHelis();
+}
 
 /* ================================================================
  * HUD + input
@@ -1825,7 +2050,7 @@ document.addEventListener('keyup', e => { keys[e.code] = false; kb[e.code] = fal
 
 // ---- gamepad: synthetic codes merged into keys every frame ----------------
 // any XInput / DualShock / DualSense works; it activates itself when you press
-const PAD_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space'];
+const PAD_CODES = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ShiftLeft', 'Space', 'HeliThrottle'];
 let padPrev = null;
 function pollGamepad(dt) {
   const pads = (typeof navigator !== 'undefined' && navigator.getGamepads)
@@ -1855,12 +2080,19 @@ function pollGamepad(dt) {
     if (edge(2)) doInteract();             // X in/out of vehicle
     if (edge(3) && playing) breakBlock();  // Y break block
   } else if (heli) {
-    // heli: left stick = turn (X) + up/down (Y), A forward, B brake
+    // heli: left stick = lean (X) + up/down (Y), A forward, B brake,
+    // right stick = steer (X) + forward/back (Y) — same as the mouse
     if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
     if (lx < 0) set('KeyA'); else if (lx > 0) set('KeyD');
-    if (b(0)) set('ShiftLeft');            // A throttle
+    if (b(0)) set('HeliThrottle');         // A throttle (cruise)
     if (b(1)) set('Space');                // B brake
+    if (b(5)) set('ShiftLeft');            // R1 boost
     if (edge(2)) doInteract();
+    if (rx) heliStick.x = THREE.MathUtils.clamp(rx, -1, 1);
+    else if (padHX) heliStick.x = 0;       // pad steer released → center
+    if (ry) heliStick.y = THREE.MathUtils.clamp(ry, -1, 1);
+    else if (padHY) heliStick.y = 0;       // pad throttle released → idle
+    padHX = rx; padHY = ry;
   } else {
     // car: A gas, B brake/reverse, sticks steer
     if (ly < 0) set('KeyW'); else if (ly > 0) set('KeyS');
@@ -1872,6 +2104,7 @@ function pollGamepad(dt) {
     if (b(5)) set('ShiftLeft');            // R1 boost
     if (edge(2)) doInteract();
   }
+  if (!heli) { padHX = 0; padHY = 0; }   // not in heli: no pending pad release to deliver
   // right stick is the camera on foot (A = left stays true)
   if (playing && !inCar) {
     player.yaw += rx * 2.2 * dt;
@@ -1892,9 +2125,18 @@ document.addEventListener('pointerlockchange', () => {
   statusEl.style.display = 'none';
 });
 document.addEventListener('mousemove', e => {
-  if (!playing || drivingCar) return;
-  player.yaw += e.movementX * 0.0023;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0023, -1.45, 1.45);
+  if (!playing) return;
+  const heli = drivingCar && drivingCar.heli;
+  if (drivingCar && !heli) return;   // car: no mouse control
+  if (heli) {
+    // heli: mouse flies it — steer auto-centers, throttle latches:
+    // flick up once to a speed, it holds until you move the mouse back down
+    heliStick.x = THREE.MathUtils.clamp(heliStick.x + e.movementX * 0.004, -1, 1);
+    heliStick.y = THREE.MathUtils.clamp(heliStick.y - e.movementY * 0.004, -1, 1);
+  } else {
+    player.yaw += e.movementX * 0.0023;
+    player.pitch = THREE.MathUtils.clamp(player.pitch - e.movementY * 0.0023, -1.45, 1.45);
+  }
 });
 let mouseDown = false, breakCooldown = 0;
 document.addEventListener('mousedown', e => {
@@ -1930,7 +2172,7 @@ function updateHud(dt) {
   let hint = '';
   if (playing) {
     if (drivingCar) hint = drivingCar.heli
-      ? 'W/\u2191 up \u00b7 S/\u2193 down \u00b7 A/D turn \u00b7 Shift fly forward \u00b7 Space brake \u00b7 E pilot out / get out'
+      ? 'W/\u2191 up \u00b7 S/\u2193 down \u00b7 A/D or mouse steer \u00b7 mouse-up fly \u00b7 Shift boost \u00b7 Space/mouse-down brake \u00b7 E pilot out / get out'
       : 'W/\u2191 drive \u00b7 S/\u2193 brake / reverse \u00b7 A/D steer \u00b7 Shift boost \u00b7 Space brake \u00b7 E get out';
     else if (nearCar) hint = nearCar.driver
       ? (nearCar.heli ? 'E \u2014 throw the pilot out' : 'E \u2014 throw the driver out')
@@ -1954,11 +2196,22 @@ function loop(now) {
     else { updatePlayer(dt); breakIfHeld(dt); }
   }
   nearCar = playing && !drivingCar && !busted ? findNearCar() : null;
-  // wanted level decays one star per clean 20 s
-  if (wanted > 0) { wantedT -= dt; if (wantedT <= 0) { wanted--; wantedT = 20; } }
-  if (wanted === 0 && lastWanted > 0)
-    for (const c of cars) if (c.police && !c.parked && c !== drivingCar) copRetreat(c);
-  lastWanted = wanted;
+  if (MP) {
+    // server-authoritative: wanted, grants and revokes
+    wanted = mpWanted;
+    if (mpRequested != null && !nearCar) { mpRequested = null; mpApi.releaseVehicle(); }
+    if (!drivingCar && mpRequested != null && mpGranted === mpRequested) {
+      const car = cars.find(c => c.mpId === mpRequested);
+      if (car) { enterCar(car); mpRequested = null; }
+    }
+    if (drivingCar && mpGranted !== drivingCar.mpId && !busted) exitCar();
+  } else {
+    // wanted level decays one star per clean 20 s
+    if (wanted > 0) { wantedT -= dt; if (wantedT <= 0) { wanted--; wantedT = 20; } }
+    if (wanted === 0 && lastWanted > 0)
+      for (const c of cars) if (c.police && !c.parked && c !== drivingCar) copRetreat(c);
+    lastWanted = wanted;
+  }
   bustTextT -= dt;
   bustedEl.style.display = bustTextT > 0 ? 'block' : 'none';
   // police light bar
@@ -1973,23 +2226,25 @@ function loop(now) {
       c.rotor.rotation.y += (c.rotorSpd ?? 4) * dt;
       c.tailRotor.rotation.x += (c.rotorSpd ?? 4) * 0.9 * dt;
     }
-    if (c.parked && c !== drivingCar) coastCar(c, dt);
+    if (!MP && c.parked && c !== drivingCar) coastCar(c, dt);   // MP: server coasts
   }
   updateEjected(dt);
-  respawnT -= dt;
-  if (respawnT <= 0) {
-    respawnT = 15;
-    let active = 0;
-    for (const c of cars) if (!c.parked && c !== drivingCar) active++;
-    if (active < 12 && cars.length < 24) spawnCars(1);
+  if (!MP) {
+    respawnT -= dt;
+    if (respawnT <= 0) {
+      respawnT = 15;
+      let active = 0;
+      for (const c of cars) if (!c.parked && c !== drivingCar) active++;
+      if (active < 12 && cars.length < 24) spawnCars(1);
+    }
+    pedRespawnT -= dt;
+    if (pedRespawnT <= 0) {
+      pedRespawnT = 10;
+      if (peds.length < 26) spawnPeds(1);
+    }
   }
-  pedRespawnT -= dt;
-  if (pedRespawnT <= 0) {
-    pedRespawnT = 10;
-    if (peds.length < 26) spawnPeds(1);
-  }
-  updatePeds(dt);
-  updateCars(dt);
+  if (MP) updateMpTraffic(dt);
+  else { updatePeds(dt); updateCars(dt); }
   updateEnvironment(dt);
   updateDebris(dt);
   updateHud(dt);
@@ -2026,6 +2281,26 @@ let mpApi = null;
         const i = idx(x, y, z);
         if (world[i] !== world0[i]) { setB(x, y, z, world0[i]); rebuildAround(x, z); }
       },
+      // protocol v3: the server sim owns every car, cop, heli and ped
+      onWorldSync: (vehicles, peds) => mpWorldSync(vehicles, peds),
+      onVehicles: mpVehiclesTick,
+      onPeds: mpPedsTick,
+      onEvents: mpEvents,
+      onClientEvents: mpClientEvents,
+      onOwnState: mpOwnState,
+    });
+    // the vehicle we drive is client-authoritative: report it at 30 Hz
+    mpApi.setVehProvider(() => {
+      const car = drivingCar;
+      if (!car) return null;
+      return {
+        id: car.mpId,
+        x: car.x, y: car.gy ?? 3, z: car.z,
+        heading: car.g.rotation.y,
+        speed: car.speed,
+        vy: car.heli ? (car.vy ?? 0) : 0,
+        boost: keys['ShiftLeft'] || keys['ShiftRight'],
+      };
     });
   }
 }

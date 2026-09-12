@@ -80,7 +80,7 @@ In a helicopter:
 | Key | Action |
 |-----|--------|
 | W/S | ascend / descend |
-| A/D | turn |
+| A/D | lean + drift left / right (doesn't turn) |
 | Shift | fly forward |
 | Space | brake |
 | E | throw the pilot out / steal, or get out (in the air: you get flung) |
@@ -93,7 +93,7 @@ and merges its output into the same input map as the keyboard):
 
 | Button | On foot | In a car | In a heli |
 |--------|---------|----------|-----------|
-| Left stick | move (also steers) | drive / steer | turn + up/down |
+| Left stick | move (also steers) | drive / steer | lean left/right + up/down |
 | Right stick | look | steer | (camera is fixed) |
 | A / Cross | jump (hold = auto-hop) | gas | fly forward |
 | B / Circle | — | brake / reverse | brake |
