@@ -41,6 +41,13 @@ the same city without transmitting it. Over the wire:
   TCP), and a tab that joins late receives the full edit history, so every
   tab converges on the same hole-riddled skyline.
 
+The server is the **master** of the shared state: it holds the same
+deterministic world grid and validates everything clients send — only
+"break to air" edits on destructible blocks are applied (roads and
+sidewalks survive), placement is impossible, and player states that
+imply super-speed or leave the world are dropped. A rejected block edit
+comes back in the next tick and the client rolls the block back.
+
 **Hard-refresh after a server update** (Ctrl+Shift+R): an old tab still sees
 the other players, but its block edits are no longer synced.
 
@@ -73,7 +80,7 @@ In a helicopter:
 | Key | Action |
 |-----|--------|
 | W/S | ascend / descend |
-| A/D | turn |
+| A/D | lean + drift left / right (doesn't turn) |
 | Shift | fly forward |
 | Space | brake |
 | E | throw the pilot out / steal, or get out (in the air: you get flung) |
@@ -86,7 +93,7 @@ and merges its output into the same input map as the keyboard):
 
 | Button | On foot | In a car | In a heli |
 |--------|---------|----------|-----------|
-| Left stick | move (also steers) | drive / steer | turn + up/down |
+| Left stick | move (also steers) | drive / steer | lean left/right + up/down |
 | Right stick | look | steer | (camera is fixed) |
 | A / Cross | jump (hold = auto-hop) | gas | fly forward |
 | B / Circle | — | brake / reverse | brake |
