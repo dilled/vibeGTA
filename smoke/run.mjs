@@ -73,6 +73,24 @@ patched += `
   pump(5);
   exitCar();
   if (!rig.g.visible) throw new Error('rig should be visible after ground exit');
+  // fire escape: find a ladder base, hold Space, must climb to the roof landing
+  let lx = -1, lz = -1;
+  outer: for (let x = 0; x < WORLD; x++)
+    for (let z = 0; z < WORLD; z++)
+      if (getB(x, 4, z) === T.FIRE && getB(x, 5, z) === T.FIRE) { lx = x; lz = z; break outer; }
+  if (lx < 0) throw new Error('no fire-escape ladders in the world');
+  // drop leftover player ragdolls (heli flow) so they can't re-sync the position
+  for (let i = ejected.length - 1; i >= 0; i--) if (ejected[i].isPlayer) ejected.splice(i, 1);
+  player.pos.set(lx + 0.5, 4, lz + 0.5);
+  player.vel.set(0, 0, 0);
+  pump(3);                              // settle onto the lot
+  keys['Space'] = true;
+  pump(5);
+  if (!player.climbing) throw new Error('climb did not start on the ladder');
+  pump(1200);
+  if (player.pos.y < 12) throw new Error('climb did not reach a high landing: ' + player.pos.y.toFixed(1));
+  keys['Space'] = false;
+  pump(120);
 }
 `;
 const file = join(here, '.game-smoke.mjs');

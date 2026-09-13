@@ -74,7 +74,7 @@
     <div class="row"><b>W A S D</b><span>move</span></div>
     <div class="row"><b>Mouse</b><span>look</span></div>
     <div class="row"><b>Shift</b><span>sprint</span></div>
-    <div class="row"><b>Space</b><span>jump</span></div>
+    <div class="row"><b>Space</b><span>jump / hold on fire escapes to climb</span></div>
     <div class="row"><b>Left click</b><span>break blocks</span></div>
     <div class="row"><b>Esc</b><span>pause</span></div>
     <div class="row"><b>E</b><span>steal / exit car</span></div>
@@ -134,9 +134,10 @@ const T = {
   AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, ASPHALT: 4, SIDEWALK: 5,
   BRICK: 6, PLASTER: 7, GLASS: 8, ROOF: 9, TRUNK: 10, LEAVES: 11,
   POLE: 12, LAMP: 13, ASPH_X: 14, ASPH_Z: 15,
+  FIRE: 16,   // fire-escape steel (ladders / landings)
 };
 const DESTRUCTIBLE = { [T.GRASS]:1, [T.DIRT]:1, [T.STONE]:1, [T.BRICK]:1, [T.PLASTER]:1,
-  [T.GLASS]:1, [T.ROOF]:1, [T.TRUNK]:1, [T.LEAVES]:1, [T.POLE]:1, [T.LAMP]:1 };
+  [T.GLASS]:1, [T.ROOF]:1, [T.TRUNK]:1, [T.LEAVES]:1, [T.POLE]:1, [T.LAMP]:1, [T.FIRE]:1 };
 // roads (ASPHALT / ASPH_X / ASPH_Z) and SIDEWALK are NOT destructible
 const setB = (x, y, z, v) => { if (inB(x, y, z)) world[idx(x, y, z)] = v; };
 const solid = b => b !== T.AIR;
@@ -213,6 +214,22 @@ function buildBuilding(bx, bz) {
     for (let z = z0; z < z0 + D; z++) setB(x, H, z, T.ROOF);
   for (let x = x0; x < x0 + W; x++) { setB(x, H + 1, z0, T.ROOF); setB(x, H + 1, z0 + D - 1, T.ROOF); }
   for (let z = z0; z < z0 + D; z++) { setB(x0, H + 1, z, T.ROOF); setB(x0 + W - 1, H + 1, z, T.ROOF); }
+  // fire escape: zig-zag ladders + landings on the -x facade, up to the roof
+  // (lets the player reach the roof on foot — no helicopter needed)
+  const offA = 4 + ri(0, (D >> 1) - 5) * 2;
+  let offB = D - 2 - offA;
+  if (offB === offA) offB -= 2;
+  const zA = z0 + offA, zB = z0 + offB;
+  for (let y = 4; y <= H + 1; y++) { setB(x0 - 2, y, zA, T.FIRE); setB(x0 - 2, y, zB, T.FIRE); }
+  const landAt = (y, zc) => {
+    for (let dx = -3; dx <= -1; dx++)
+      for (let dz = -1; dz <= 1; dz++) setB(x0 + dx, y, zc + dz, T.FIRE);
+  };
+  let alt = 0;
+  for (let f = 8; f <= H - 4; f += 4) { landAt(f, alt ? zB : zA); alt ^= 1; }
+  landAt(H + 1, zB);                    // roof landing at parapet height
+  setB(x0, H + 1, zB, T.AIR);           // breach in the parapet: step onto the roof
+
   // rooftop boxes (HVAC / water)
   const nBoxes = ri(1, 3);
   for (let k = 0; k < nBoxes; k++) {
@@ -382,6 +399,15 @@ function tileXY(t) { return [t % 8, (t / 8) | 0]; }
   const [t14x, t14y] = tileXY(14);                                            // lamp head (bright)
   for (let y = 0; y < 16; y++)
     for (let x = 0; x < 16; x++) px(t14x * 16 + x, t14y * 16 + y, 255, 224, 158);
+  const [t15x, t15y] = tileXY(15);                                           // fire-escape steel
+  for (let y = 0; y < 16; y++)
+    for (let x = 0; x < 16; x++) {
+      const n = (hsh(t15x * 16 + x, t15y * 16 + y) - 0.5) * 12;
+      let r = 98 + n, g = 102 + n, b = 108 + n;
+      if (y % 4 === 2) { r -= 36; g -= 36; b -= 34; }                        // rung band
+      else if (x === 3 || x === 12) { r -= 22; g -= 22; b -= 22; }          // side rails
+      px(t15x * 16 + x, t15y * 16 + y, r, g, b);
+    }
   actx.putImageData(aimg, 0, 0);
 }
 const atlasTex = new THREE.CanvasTexture(atlasCanvas);
@@ -415,6 +441,7 @@ const TILEMAP = {
   [T.LEAVES]: [12, 12, 12, [1, 1, 1]],
   [T.POLE]: [13, 13, 13, [1, 1, 1]],
   [T.LAMP]: [14, 14, 14, [1, 1, 1]],
+  [T.FIRE]: [15, 15, 15, [1, 1, 1]],
 };
 const FACE_SHADE = { 0: 1.0, 1: 0.88, 2: 0.8 };   // top / sides (x) / sides (z)
 
@@ -766,6 +793,7 @@ const player = {
   onGround: false, sprinting: false,
   phase: 0, speed: 0,
   W: 0.34, H: 1.75, eye: 1.62,
+  climbing: false,
 };
 let playing = false;
 
@@ -859,14 +887,41 @@ function updatePlayer(dt) {
   const tvx = fx * maxV, tvz = fz * maxV;
   player.vel.x += (tvx - player.vel.x) * Math.min(1, accel * dt / maxV);
   player.vel.z += (tvz - player.vel.z) * Math.min(1, accel * dt / maxV);
-  player.vel.y -= 22 * dt;
-  if (k['Space'] && player.onGround) { player.vel.y = 8.4; player.onGround = false; }
-
+  const wasGround = player.onGround;
+  if (k['Space'] && wasGround && !player.climbing) {
+    // fire-escape ladder? grab it: search a 3x3 around the feet for steel
+    const cx = Math.floor(player.pos.x), cz = Math.floor(player.pos.z), fy = Math.floor(player.pos.y);
+    let best = null;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dz = -1; dz <= 1; dz++)
+        for (const yy of [fy, fy + 1])
+          if (getB(cx + dx, yy, cz + dz) === T.FIRE) {
+            const d = dx * dx + dz * dz;
+            if (!best || d < best.d) best = { dx, dz, d };
+          }
+    if (best) {
+      // snap into the ladder column — the player rides inside the rung
+      if (best.d > 0) { player.pos.x = cx + best.dx + 0.5; player.pos.z = cz + best.dz + 0.5; }
+      player.climbing = true;
+      player.vel.set(0, 0, 0);
+    } else {
+      player.vel.y = 8.4; player.onGround = false;
+    }
+  }
   player.onGround = false;
-  moveAxis('x', player.vel.x * dt);
-  moveAxis('z', player.vel.z * dt);
-  moveAxis('y', player.vel.y * dt);
-  if (player.onGround) player.vel.y = 0;   // no terminal-velocity tunneling through the ground
+  if (player.climbing) {
+    // hold Space: rise at walking pace; let go: fall back onto the ladder
+    const cx = Math.floor(player.pos.x), cz = Math.floor(player.pos.z), fy = Math.floor(player.pos.y);
+    const sup = getB(cx, fy, cz) === T.FIRE || getB(cx, fy + 1, cz) === T.FIRE;
+    if (!k['Space'] || !sup) { player.climbing = false; player.vel.y = -1; }
+    else player.pos.y += 2.6 * dt;
+  } else {
+    player.vel.y -= 22 * dt;
+    moveAxis('x', player.vel.x * dt);
+    moveAxis('z', player.vel.z * dt);
+    moveAxis('y', player.vel.y * dt);
+    if (player.onGround) player.vel.y = 0;   // no terminal-velocity tunneling through the ground
+  }
   player.pos.y = Math.max(1, Math.min(60, player.pos.y));
   player.pos.x = Math.max(1, Math.min(WORLD - 1, player.pos.x));
   player.pos.z = Math.max(1, Math.min(WORLD - 1, player.pos.z));
@@ -986,7 +1041,7 @@ function updateDebris(dt) {
 const TYPE_COLOR = {
   [T.GRASS]: 0x4a8a3a, [T.DIRT]: 0x7a5c3a, [T.STONE]: 0x70727a, [T.BRICK]: 0x944a3a,
   [T.PLASTER]: 0xc4bcac, [T.GLASS]: 0x88b0cc, [T.ROOF]: 0x5a5c64, [T.TRUNK]: 0x685032,
-  [T.LEAVES]: 0x2c6828, [T.POLE]: 0x30323a, [T.LAMP]: 0xffe09e, [T.SIDEWALK]: 0x9aa0a6,
+  [T.LEAVES]: 0x2c6828, [T.POLE]: 0x30323a, [T.LAMP]: 0xffe09e, [T.SIDEWALK]: 0x9aa0a6, [T.FIRE]: 0x62666e,
 };
 function localBlockEdit(x, y, z, type) {
   const b = getB(x, y, z);
@@ -2220,6 +2275,7 @@ function updateHud(dt) {
     if (drivingCar) hint = drivingCar.heli
       ? 'W/\u2191 up \u00b7 S/\u2193 down \u00b7 A/D or mouse steer \u00b7 mouse-up fly \u00b7 Shift boost \u00b7 Space/mouse-down brake \u00b7 E pilot out / get out'
       : 'W/\u2191 drive \u00b7 S/\u2193 brake / reverse \u00b7 A/D steer \u00b7 Shift boost \u00b7 Space brake \u00b7 E get out';
+    else if (player.climbing) hint = 'climbing \u2014 hold Space, release to let go';
     else if (nearCar) hint = nearCar.driver
       ? (nearCar.heli ? 'E \u2014 throw the pilot out' : 'E \u2014 throw the driver out')
       : (nearCar.heli ? 'E \u2014 steal this helicopter' : 'E \u2014 steal this car');

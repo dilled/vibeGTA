@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [world, multiplayer, mp]
 created: "2026-09-11T16:52:32"
-updated: "2026-09-11T16:52:32"
+updated: "2026-09-13T18:49:33"
 ---
 
 <!-- compiled_truth -->
@@ -40,4 +40,10 @@ Makes shared destruction cheap and self-healing: reliable TCP relay of 4-byte ed
   kind: decision
   summary: captured from project history
   source: "index.html, README.md"
+  affects: [deterministic-seeded-world]
+
+- time: 2026-09-13T18:49:33
+  kind: decision
+  summary: "Fire escapes: new block type T.FIRE=16, zigzag ladders + landings + parapet gap generated inside buildBuilding (hold Space to climb to roof). New ri() calls shift the RNG sequence for everything generated after each building — same cross-version desync rule as any world-gen change."
+  source: "index.html buildBuilding/updatePlayer, smoke/run.mjs"
   affects: [deterministic-seeded-world]

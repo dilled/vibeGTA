@@ -55,6 +55,10 @@ those manually.
       inverted once — verify both axes)
 - [ ] Left click breaks the highlighted block (roads/sidewalks don't break)
 - [ ] Walk into a building: you collide, you don't clip through
+- [ ] **Fire escapes:** every building facade carries a zigzag metal
+      ladder + landings; stand on the lot, hold **Space** against the ladder
+      to climb floor by floor, release to let go (no drop-through), and top
+      out on the roof through the parapet gap
 - [ ] No jitter or teleporting at block boundaries or world edges
 
 ### Carjacking & driving (GTA1 style)

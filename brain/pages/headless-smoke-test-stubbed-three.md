@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [testing]
 created: "2026-09-11T16:52:32"
-updated: "2026-09-11T16:52:32"
+updated: "2026-09-13T18:49:39"
 ---
 
 <!-- compiled_truth -->
@@ -40,4 +40,10 @@ Catches runtime errors in hot paths that node --check misses — three shipped b
   kind: decision
   summary: captured from project history
   source: "git log 6bc0a35, TESTING.md"
+  affects: [headless-smoke-test-stubbed-three]
+
+- time: 2026-09-13T18:49:39
+  kind: note
+  summary: "Smoke flow extended: after the heli flow it finds a fire-escape ladder, teleports the player to its base (splicing leftover isPlayer ejects first), holds Space and asserts the climb starts and reaches a high landing."
+  source: smoke/run.mjs
   affects: [headless-smoke-test-stubbed-three]
