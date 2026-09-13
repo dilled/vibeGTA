@@ -49,6 +49,14 @@
     background: rgba(6,10,18,.45); border: 1px solid rgba(120,160,230,.18);
     border-radius: 8px; padding: 6px 14px; display: none; pointer-events: none; white-space: nowrap;
   }
+  #heliHud {
+    position: fixed; top: 14px; left: 14px; z-index: 12;
+    font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 12px; line-height: 1.55;
+    color: #a9f5c4; text-shadow: 0 1px 3px rgba(0,0,0,.8); pointer-events: none; white-space: pre;
+    background: rgba(6,10,18,.35); border: 1px solid rgba(120,230,160,.16);
+    border-radius: 8px; padding: 8px 12px; display: none;
+  }
+  #heliHud .warn { color: #ffd75e; }
   #status {
     position: fixed; top: 14px; right: 14px; z-index: 12; text-align: right;
     font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: 12px; line-height: 1.5;
@@ -70,6 +78,7 @@
     <div class="row"><b>Left click</b><span>break blocks</span></div>
     <div class="row"><b>Esc</b><span>pause</span></div>
     <div class="row"><b>E</b><span>steal / exit car</span></div>
+    <div class="row"><b>Chopper</b><span>W/S hover &amp; up/down &middot; flick mouse / right stick up = throttle (it latches) &middot; down = brake &middot; small nudges ignored &mdash; hold still to hover</span></div>
     <div class="row"><b>Gamepad</b><span>sticks move/look/steer &middot; A jump/gas &middot; B brake</span></div>
     <div class="row"><b>Gamepad&hairsp;·&hairsp;2</b><span>X in/out &middot; Y break block &middot; L1/R1 sprint/boost/handbrake &middot; Start pause</span></div>
     <div style="margin-top:10px;font-size:12px;color:#7d92b4">roads &amp; sidewalks are indestructible. the rest is not.</div>
@@ -77,6 +86,7 @@
   <div class="play">— click to play —</div>
 </div>
 <div id="crosshair"></div>
+<div id="heliHud"></div>
 <div id="status"></div>
 <div id="busted">BUSTED</div>
 <div id="hint"></div>
@@ -1862,6 +1872,10 @@ const CAR_PTS = [[0, 0], [1, 1.7], [-1, 1.7], [1, -1.7], [-1, -1.7]];
 // until moved back. padXY tracks the pad's previous frame to detect release.
 const heliStick = { x: 0, y: 0 };
 let padHX = 0, padHY = 0;
+// little deadzone: mouse jitter / pad center drift below this produces no turn
+// or thrust, so W/S alone holds a clean hover without the chopper wandering.
+const HELI_DZ = 0.2;
+const heliDz = v => Math.abs(v) < HELI_DZ ? 0 : v;
 // helicopter flight: W/S up-down, A/D lean + drift sideways (no turn), mouse/right-stick turn,
 // Shift/mouse-up forward, Space/mouse-down brake+reverse
 function updateFlying(dt) {
@@ -1874,10 +1888,11 @@ function updateFlying(dt) {
   car.vy = car.vy ?? 0; car.gy = car.gy ?? 3;
   const maxV = boost ? 40 : 24;
   heliStick.x *= Math.exp(-2.5 * dt);   // steer auto-centers; throttle (y) latches
-  const steer = THREE.MathUtils.clamp(-heliStick.x, -1, 1);   // only mouse/right-stick turns
+  const sx = heliDz(heliStick.x), sy = heliDz(heliStick.y);   // deadzone → clean hover
+  const steer = THREE.MathUtils.clamp(-sx, -1, 1);   // only mouse/right-stick turns
   // forward: mouse/stick/pad-A throttle (Shift also flies, at boost power)
-  const fwd = THREE.MathUtils.clamp(Math.max(heliStick.y, 0, boost ? 1 : 0, k['HeliThrottle'] ? 1 : 0), 0, 1);
-  const back = Math.max(hand ? 1 : 0, -heliStick.y);
+  const fwd = THREE.MathUtils.clamp(Math.max(sy, 0, boost ? 1 : 0, k['HeliThrottle'] ? 1 : 0), 0, 1);
+  const back = Math.max(hand ? 1 : 0, -sy);
   if (fwd > 0) car.speed += (boost ? 22 : 10) * fwd * dt * Math.max(0.2, 1 - car.speed / maxV);
   else if (!back) car.speed -= car.speed * 0.8 * dt;
   if (back > 0) {
@@ -1953,6 +1968,7 @@ function updateFlying(dt) {
   const fovT = Math.min(100, 74 + car.speed * 0.9);
   camera.fov += (fovT - camera.fov) * Math.min(1, 8 * dt);
   camera.updateProjectionMatrix();
+  car._hud = { fwd, back, steer };   // effective inputs for the HUD (post-deadzone)
 }
 function updateDriving(dt) {
   if (drivingCar.heli) { updateFlying(dt); return; }
@@ -2123,6 +2139,7 @@ document.addEventListener('pointerlockchange', () => {
   overlay.style.display = playing ? 'none' : 'flex';
   crosshair.style.opacity = playing ? 1 : 0;
   statusEl.style.display = 'none';
+  heliHudEl.style.display = 'none';
 });
 document.addEventListener('mousemove', e => {
   if (!playing) return;
@@ -2130,7 +2147,8 @@ document.addEventListener('mousemove', e => {
   if (drivingCar && !heli) return;   // car: no mouse control
   if (heli) {
     // heli: mouse flies it — steer auto-centers, throttle latches:
-    // flick up once to a speed, it holds until you move the mouse back down
+    // flick up once past the deadzone and it holds until moved back; small
+    // movements inside the deadzone are ignored so the heli can hover still
     heliStick.x = THREE.MathUtils.clamp(heliStick.x + e.movementX * 0.004, -1, 1);
     heliStick.y = THREE.MathUtils.clamp(heliStick.y - e.movementY * 0.004, -1, 1);
   } else {
@@ -2148,6 +2166,34 @@ document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = fals
 
 let hudTimer = 0;
 const hintEl = document.getElementById('hint');
+const heliHudEl = document.getElementById('heliHud');
+// heli HUD: AGL altitude, speed, heading, vertical speed, effective throttle
+// + steering, and warnings — updated every frame (text is cheap enough)
+function updateHeliHud() {
+  const car = drivingCar;
+  if (!car || !car.heli || !playing) { heliHudEl.style.display = 'none'; return; }
+  heliHudEl.style.display = 'block';
+  const agl = Math.max(0, (car.gy ?? 0) - heliGroundAt(Math.floor(car.x), Math.floor(car.z), car.gy));
+  const vy = car.vy ?? 0;
+  const hd = car._hud || { fwd: 0, back: 0, steer: 0 };
+  const hdeg = (((car.g.rotation.y % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) * 180 / Math.PI;
+  const hdir = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(hdeg / 45) % 8];
+  const thr = '▓'.repeat(Math.round(hd.fwd * 10)) + '░'.repeat(10 - Math.round(hd.fwd * 10));
+  const sn = 11, spos = Math.round((hd.steer + 1) / 2 * (sn - 1));
+  let stw = '';
+  for (let i = 0; i < sn; i++) stw += i === 5 ? '|' : i === spos ? '▓' : '░';
+  let warn = '';
+  if (agl < 0.6) warn = 'on ground';
+  else if (vy < -8) warn = '⚠ sinking fast — S/↓ brakes, W/↑ climbs';
+  else if (agl < 6) warn = 'low — check your heading before it hits';
+  heliHudEl.innerHTML =
+    `H <span style="color:#fff">${Math.round(agl).toString().padStart(4, '0')}</span> m AGL&nbsp; ` +
+    `<span style="color:#fff">${Math.round(Math.abs(car.speed) * 3.6).toString().padStart(3, '0')}</span> km/h` +
+    `\nHDG ${Math.round(hdeg).toString().padStart(3, '0')} ${hdir}&nbsp; ` +
+    `VS ${vy >= 0 ? '+' : '−'}${Math.abs(vy).toFixed(1)} m/s` +
+    `\nTHR ${thr}${hd.back ? '  ⏴ brake' : ''}\nSTW ${stw}` +
+    (warn ? `\n<span class="warn">${warn}</span>` : '');
+}
 function updateHud(dt) {
   hudTimer -= dt;
   if (hudTimer > 0) return;
@@ -2248,6 +2294,7 @@ function loop(now) {
   updateEnvironment(dt);
   updateDebris(dt);
   updateHud(dt);
+  updateHeliHud();
   renderer.render(scene, camera);
 }
 // hold left mouse: continuous breaking

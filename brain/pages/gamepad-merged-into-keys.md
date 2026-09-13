@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [input, gamepad]
 created: "2026-09-11T16:52:32"
-updated: "2026-09-11T16:52:32"
+updated: "2026-09-13T17:29:50"
 ---
 
 <!-- compiled_truth -->
@@ -40,4 +40,9 @@ Zero changes to all walk/drive/fly logic — one input surface; any XInput/DualS
   kind: decision
   summary: captured from project history
   source: git log ce286a5
+  affects: [gamepad-merged-into-keys]
+
+- time: 2026-09-13T17:29:50
+  kind: decision
+  summary: "Heli sticks (mouse / right stick) use a ±0.2 deadzone (HELI_DZ, applied in updateFlying) so input jitter produces no turn or thrust — W/S alone holds a clean hover. A #heliHud DOM panel (AGL, km/h, HDG, VS, throttle & steering bars, sink/ground warnings) shows the effective post-deadzone inputs; title overlay gained a chopper controls row."
   affects: [gamepad-merged-into-keys]

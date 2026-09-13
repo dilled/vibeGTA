@@ -1,6 +1,6 @@
 # Brain Index
 
-_Auto-generated. Last updated 2026-09-12T13:03:32.885Z._
+_Auto-generated. Last updated 2026-09-13T14:29:50.414Z._
 
 - [deterministic-seeded-world](pages/deterministic-seeded-world.md) — category: decision | tags: [world, multiplayer, mp] | ## What was decided
 - [gamepad-merged-into-keys](pages/gamepad-merged-into-keys.md) — category: decision | tags: [input, gamepad] | ## What was decided
